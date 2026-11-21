@@ -1,0 +1,3 @@
+-dontwarn javax.annotation.**
+-dontwarn org.jose4j.**
+-keepattributes Signature,InnerClasses,EnclosingMethod
