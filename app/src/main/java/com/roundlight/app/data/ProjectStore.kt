@@ -36,13 +36,18 @@ class ProjectStore(private val context: Context, private val log: Diagnostics) {
         val rawDest=raw?.let { File(folder(p.id),"$name.dng") }
         try {
             dest.outputStream().use { it.write(jpeg) }
-            if(raw != null) check(raw.renameTo(rawDest!!)) { "Could not save the RAW file." }
+            if(raw != null) {
+                if (!raw.renameTo(rawDest!!)) {
+                    raw.copyTo(rawDest, overwrite = true)
+                    raw.delete()
+                }
+            }
             val next=p.copy(frames=p.frames+Frame(file=dest.name,raw=rawDest?.name,opacity=1f/(p.frames.size+1),captureInfo=metadata))
             save(next); log.event("capture.saved",mapOf("frames" to next.frames.size,"bytes" to jpeg.size)); return next
         } catch(e: Exception) { dest.delete(); rawDest?.delete(); throw e }
     }
     fun import(p: Project,uri: Uri): Project {
-        requireSpace(); val name="${UUID.randomUUID()}.jpg"; val temp=File(folder(p.id),"import.tmp")
+        requireSpace(); val dir=folder(p.id).apply { mkdirs() }; val name="${UUID.randomUUID()}.jpg"; val temp=File(dir,"import.tmp")
         try {
             context.contentResolver.openInputStream(uri)?.use { input -> temp.outputStream().use { out ->
                 val buffer=ByteArray(65536); var total=0L
@@ -51,8 +56,7 @@ class ProjectStore(private val context: Context, private val log: Diagnostics) {
             val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }; BitmapFactory.decodeFile(temp.path,bounds)
             require(bounds.outWidth>0 && bounds.outHeight>0) { "Choose a JPEG, PNG or supported photo. Import RAW with its JPEG companion." }
             // Preserve JPEG originals byte-for-byte; other formats are normalized to a bounded working JPEG.
-            val actualName=if(bounds.outMimeType=="image/jpeg") name else name
-            val dest=File(folder(p.id),actualName)
+            val dest=File(dir,name)
             if(bounds.outMimeType=="image/jpeg") check(temp.renameTo(dest)) else {
                 val image=decode(temp,6000); try { dest.outputStream().use { check(image.compress(Bitmap.CompressFormat.JPEG,98,it)) } } finally { image.recycle() }
             }
@@ -74,7 +78,7 @@ class ProjectStore(private val context: Context, private val log: Diagnostics) {
         fun dimensions(file:File):Pair<Int,Int> {
             val opts=BitmapFactory.Options().apply{inJustDecodeBounds=true};BitmapFactory.decodeFile(file.path,opts)
             require(opts.outWidth>0 && opts.outHeight>0){"A source photo is missing or unreadable."}
-            val rotation=ExifInterface(file).rotationDegrees
+            val rotation=runCatching{ExifInterface(file).rotationDegrees}.getOrDefault(0)
             return if(rotation==90 || rotation==270)opts.outHeight to opts.outWidth else opts.outWidth to opts.outHeight
         }
         fun decode(file: File,maxEdge: Int): Bitmap {
@@ -86,9 +90,9 @@ class ProjectStore(private val context: Context, private val log: Diagnostics) {
             while(max(opts.outWidth,opts.outHeight)/sample>maxEdge*1.5 || opts.outWidth.toLong()*opts.outHeight/(sample.toLong()*sample)>safePixels)sample*=2
             opts.inJustDecodeBounds=false; opts.inSampleSize=sample; opts.inPreferredConfig=Bitmap.Config.ARGB_8888
             var bitmap=BitmapFactory.decodeFile(file.path,opts) ?: throw IOException("Unable to decode photo.")
-            val exif=ExifInterface(file); val matrix=Matrix()
-            if(exif.isFlipped) matrix.postScale(-1f,1f)
-            if(exif.rotationDegrees!=0) matrix.postRotate(exif.rotationDegrees.toFloat())
+            val exif=runCatching{ExifInterface(file)}.getOrNull(); val matrix=Matrix()
+            if(exif?.isFlipped==true) matrix.postScale(-1f,1f)
+            if((exif?.rotationDegrees ?: 0)!=0) matrix.postRotate(exif!!.rotationDegrees.toFloat())
             if(!matrix.isIdentity) { val rotated=Bitmap.createBitmap(bitmap,0,0,bitmap.width,bitmap.height,matrix,true); if(rotated!==bitmap) bitmap.recycle(); bitmap=rotated }
             val ratio=min(1f,maxEdge.toFloat()/max(bitmap.width,bitmap.height))
             if(ratio<1f) { val scaled=Bitmap.createScaledBitmap(bitmap,max(1,(bitmap.width*ratio).roundToInt()),max(1,(bitmap.height*ratio).roundToInt()),true); if(scaled!==bitmap) bitmap.recycle(); bitmap=scaled }

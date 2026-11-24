@@ -8,6 +8,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import com.roundlight.app.model.appJson
 import java.io.File
+import java.io.FileNotFoundException
 import java.security.KeyStore
 import java.util.UUID
 import javax.crypto.Cipher
@@ -25,7 +26,9 @@ data class Account(
     val idToken: String = "",
     val expiresAt: Long = 0,
     val scopes: Set<String> = emptySet(),
-    val welcomed: Boolean = false
+    val welcomed: Boolean = false,
+    val selectedModel: String = "",
+    val selectedModelLabel: String = ""
 ) {
     val connected get() = accessToken.isNotBlank()
     val canUsePlan get() = connected && "chatgpt.tokens.use.direct" in scopes
@@ -51,8 +54,8 @@ class CredentialStore(context: Context) {
         }.generateKey()
     }
     @Synchronized fun read(): Connections {
-        if (!file.baseFile.exists()) return Connections().also { write(it) }
-        val bytes = file.openRead().use { it.readBytes() }
+        val bytes = try { file.openRead().use { it.readBytes() } }
+        catch (_: FileNotFoundException) { return Connections().also { write(it) } }
         require(bytes.size > 28) { "Account storage is damaged. Reinstall to reset protected storage." }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
@@ -60,7 +63,7 @@ class CredentialStore(context: Context) {
     }
     @Synchronized fun write(value: Connections) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
-        val data = cipher.iv + cipher.doFinal(appJson.encodeToString(value).toByteArray())
+        val data = cipher.iv + cipher.doFinal(appJson.encodeToString(value).toByteArray(Charsets.UTF_8))
         val stream = file.startWrite()
         try { stream.write(data); file.finishWrite(stream) } catch (e: Exception) { file.failWrite(stream); throw e }
     }

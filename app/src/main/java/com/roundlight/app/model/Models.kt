@@ -75,4 +75,23 @@ object ColorMath {
         fun channel(c: Float) = (((luma+(c-luma)*v.saturation-.5f)*v.contrast+.5f).coerceIn(0f,1f)*255+.5f).toInt()
         return (255 shl 24) or (channel(rr) shl 16) or (channel(gg) shl 8) or channel(bb)
     }
+    fun gradeRow(row: IntArray, v: Grade) {
+        val ev = 2f.pow(v.exposure)
+        val rScale = ev * (1f + v.warmth * .12f) / 255f
+        val gScale = ev / 255f
+        val bScale = ev * (1f - v.warmth * .12f) / 255f
+        val sat = v.saturation
+        val contrast = v.contrast
+        for (x in row.indices) {
+            val c = row[x]
+            val rr = (c shr 16 and 255) * rScale
+            val gg = (c shr 8 and 255) * gScale
+            val bb = (c and 255) * bScale
+            val luma = .2126f * rr + .7152f * gg + .0722f * bb
+            val nr = (((luma + (rr - luma) * sat - .5f) * contrast + .5f).coerceIn(0f, 1f) * 255f + .5f).toInt()
+            val ng = (((luma + (gg - luma) * sat - .5f) * contrast + .5f).coerceIn(0f, 1f) * 255f + .5f).toInt()
+            val nb = (((luma + (bb - luma) * sat - .5f) * contrast + .5f).coerceIn(0f, 1f) * 255f + .5f).toInt()
+            row[x] = (255 shl 24) or (nr shl 16) or (ng shl 8) or nb
+        }
+    }
 }

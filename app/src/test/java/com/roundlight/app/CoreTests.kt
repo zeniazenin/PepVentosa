@@ -1,6 +1,7 @@
 package com.roundlight.app
 
 import com.roundlight.app.auth.*
+import com.roundlight.app.data.*
 import com.roundlight.app.imaging.*
 import com.roundlight.app.model.*
 import com.roundlight.app.network.*
@@ -61,4 +62,43 @@ class CoreTests {
     @Test fun refusalDoesNotBecomeAnEdit(){assertThrows(IOException::class.java){ResponseStream.read(stream("""{"type":"response.refusal.done"}"""))}}
     @Test fun dnsRetriesExactlyOnceButTimeoutDoesNot()=runBlocking {var calls=0;assertEquals(2,retryDnsOnce(pause={}){calls++;if(calls==1)throw UnknownHostException();calls});calls=0
         try{retryDnsOnce(pause={}){calls++;throw java.net.SocketTimeoutException()}}catch(_:java.net.SocketTimeoutException){};assertEquals(1,calls)}
+    @Test fun accountDeserializesLegacyVaultAndPreservesSelectedModel(){
+        val legacy="""{"clientId":"oaiapp_123456","email":"a@b.com","accessToken":"tok","scopes":["chatgpt.tokens.use.direct"]}"""
+        val decoded=appJson.decodeFromString<Account>(legacy)
+        assertTrue(decoded.canUsePlan)
+        assertEquals("",decoded.selectedModel)
+        val withModel=decoded.copy(selectedModel="gpt-5",selectedModelLabel="GPT-5")
+        val cleared=withModel.withoutTokens()
+        assertFalse(cleared.connected)
+        assertEquals("gpt-5",cleared.selectedModel)
+        assertEquals("GPT-5",cleared.selectedModelLabel)
+    }
+    @Test fun tokenRefreshPreservesExistingFieldsWhenNullOrBlank(){
+        val existing=Account(clientId="oaiapp_123456",accessToken="old",refreshToken="ref-1",idToken="id-1",scopes=setOf("openid","chatgpt.tokens.use.direct"),selectedModel="gpt-5")
+        val refreshJson=Json.parseToJsonElement("""{"token_type":"Bearer","access_token":"new-tok","expires_in":3600,"refresh_token":null,"id_token":null,"scope":null}""").jsonObject
+        val updated=OAuthRules.applyTokens(refreshJson,existing,nowMs=1000L)
+        assertEquals("new-tok",updated.accessToken)
+        assertEquals("ref-1",updated.refreshToken)
+        assertEquals("id-1",updated.idToken)
+        assertTrue(updated.canUsePlan)
+        assertEquals("gpt-5",updated.selectedModel)
+        val blankScope=Json.parseToJsonElement("""{"token_type":"Bearer","access_token":"new-tok-2","expires_in":3600,"scope":""}""").jsonObject
+        assertTrue(OAuthRules.applyTokens(blankScope,updated,nowMs=2000L).canUsePlan)
+    }
+    @Test fun serviceFailureFallsBackToErrorTypeWhenCodeMissing(){
+        val body=Json.parseToJsonElement("""{"error":{"code":null,"type":"server_error"}}""").jsonObject
+        val failure=ServiceFailure.from(500,body,"req-1")
+        assertEquals("server_error",failure.code)
+        assertEquals("req-1",failure.requestId)
+    }
+    @Test fun responseStreamRejectsMalformedJsonAsIoException(){
+        assertThrows(IOException::class.java){ResponseStream.read(stream("not-json"))}
+    }
+    @Test fun gradeRowMatchesPerPixelGrade(){
+        val grade=Grade(exposure=0.65f,contrast=1.22f,saturation=1.35f,warmth=-0.4f)
+        val pixels=intArrayOf(0xff000000.toInt(),0xffffffff.toInt(),0xff3366cc.toInt(),0xffc87a24.toInt(),0xff1a9e52.toInt())
+        val expected=IntArray(pixels.size){i->val c=pixels[i];ColorMath.grade((c shr 16 and 255)/255f,(c shr 8 and 255)/255f,(c and 255)/255f,grade)}
+        ColorMath.gradeRow(pixels,grade)
+        assertArrayEquals(expected,pixels)
+    }
 }

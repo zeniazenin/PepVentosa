@@ -26,7 +26,7 @@ class Renderer(private val store: ProjectStore) {
         val result=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888); val canvas=Canvas(result)
         val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         try {
-            val frames=if(solo==null)p.frames else listOf(p.frames[solo].copy(opacity=1f,visible=true))
+            val frames=if(solo==null)p.frames else listOf(p.frames[solo.coerceIn(p.frames.indices)].copy(opacity=1f,visible=true))
             require(frames.any { it.visible && it.opacity>0 }) { "At least one layer must be visible." }
             frames.forEachIndexed { index,f ->
                 currentCoroutineContext().ensureActive(); onProgress(index*100/frames.size)
@@ -76,12 +76,12 @@ class Renderer(private val store: ProjectStore) {
             if(solo==null) {
                 val row=IntArray(w)
                 for(y in 0 until h) { if(y%32==0)currentCoroutineContext().ensureActive(); result.getPixels(row,0,w,0,y,w,1)
-                    for(x in row.indices) { val c=row[x]; row[x]=ColorMath.grade((c shr 16 and 255)/255f,(c shr 8 and 255)/255f,(c and 255)/255f,p.grade) }
+                    ColorMath.gradeRow(row,p.grade)
                     result.setPixels(row,0,w,0,y,w,1)
                 }
             }
             onProgress(100)
-            if(p.crop>0 && solo==null) { val dx=(w*p.crop).toInt(); val dy=(h*p.crop).toInt(); val cropped=Bitmap.createBitmap(result,dx,dy,w-2*dx,h-2*dy); if(cropped!==result)result.recycle(); return cropped }
+            if(p.crop>0 && solo==null) { val dx=(w*p.crop).toInt(); val dy=(h*p.crop).toInt(); val cw=w-2*dx; val ch=h-2*dy; if(cw>0 && ch>0) { val cropped=Bitmap.createBitmap(result,dx,dy,cw,ch); if(cropped!==result)result.recycle(); return cropped } }
             return result
         } catch(e:Throwable) { result.recycle(); throw e }
     }

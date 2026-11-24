@@ -66,8 +66,13 @@ object ArtContract {
 class AiDirector(private val auth: ChatGptAuth,private val store: ProjectStore,private val renderer: Renderer,private val log: Diagnostics) {
     suspend fun models(): List<ModelChoice> {
         val body=requestJson(defaultHttp,Request.Builder().url("https://api.openai.com/v1/models").header("Authorization","Bearer ${auth.accessToken()}").build())
-        return body["models"]?.jsonArray.orEmpty().map { it.jsonObject }.filter { it["visibility"]?.jsonPrimitive?.content=="list" }
-            .map { ModelChoice(it.getValue("slug").jsonPrimitive.content,it.getValue("display_name").jsonPrimitive.content) }
+        return body["models"]?.jsonArray.orEmpty().mapNotNull { item ->
+            val obj = item as? JsonObject ?: return@mapNotNull null
+            if (obj["visibility"]?.jsonPrimitive?.contentOrNull != "list") return@mapNotNull null
+            val slug = obj["slug"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val label = obj["display_name"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: slug
+            ModelChoice(slug, label)
+        }
     }
     private fun text(value: String)=buildJsonObject { put("type","input_text");put("text",value) }
     private fun image(bitmap: Bitmap): JsonObject { val bytes=ByteArrayOutputStream().use { out -> bitmap.compress(Bitmap.CompressFormat.JPEG,85,out);out.toByteArray() }
@@ -93,8 +98,8 @@ class AiDirector(private val auth: ChatGptAuth,private val store: ProjectStore,p
             currentCoroutineContext().ensureActive();progress("AI art direction · group ${i+1} of ${batches.size}")
             val input=buildJsonArray {
                 add(text("Reference photograph. Target subject anchor ${p.anchor}. Canvas aspect is the same as this reference."));add(referenceInput)
-                batch.forEach { frame ->
-                    add(text("Requested ID=${frame.id}; layer=${p.frames.indexOf(frame)+1}/${p.frames.size}; opacity=${frame.opacity}; existing transform=${frame.transform}. Source image:"))
+                batch.forEachIndexed { batchIdx, frame ->
+                    add(text("Requested ID=${frame.id}; layer=${i*6+batchIdx+1}/${p.frames.size}; opacity=${frame.opacity}; existing transform=${frame.transform}. Source image:"))
                     val bitmap=ProjectStore.decode(store.photo(p,frame),768);try {add(image(bitmap))}finally{bitmap.recycle()}
                 }
             }
@@ -104,8 +109,9 @@ class AiDirector(private val auth: ChatGptAuth,private val store: ProjectStore,p
                 val proposed=Transform(t.dx+edit.dx,t.dy+edit.dy,t.scale*edit.scale,t.degrees+edit.degrees)
                 val dims=ProjectStore.dimensions(store.photo(p,frame));val sourceAspect=dims.first.toFloat()/dims.second
                 val regions=edit.masks.map{region->region.copy(points=region.points.map{ImageGeometry.sourceToCanvas(it,sourceAspect,canvasAspect)})}
-                frame.copy(opacity=if(frame.id==p.frames.first().id)1f else edit.opacity,
-                    transform=if(frame.id==p.frames.first().id)t else proposed.takeIf(Transform::valid) ?: t,regions=regions)
+                val isReference = frame.id == p.frames.first().id
+                frame.copy(opacity=if(isReference)1f else edit.opacity, visible=true,
+                    transform=if(isReference)t else proposed.takeIf(Transform::valid) ?: t,regions=regions)
             } ?: frame })
         }
         progress("AI final review · color and composition")

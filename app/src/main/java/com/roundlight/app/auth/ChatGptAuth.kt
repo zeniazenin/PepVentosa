@@ -18,6 +18,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import com.roundlight.app.data.*
 import com.roundlight.app.network.*
+import java.io.IOException
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.SocketTimeoutException
@@ -46,6 +47,18 @@ object OAuthRules {
         require(code.isNotBlank()) { "ChatGPT did not return an authorization code." }
         return code to issued
     }
+    fun applyTokens(json: JsonObject, previous: Account, nowMs: Long = System.currentTimeMillis()): Account {
+        require(json["token_type"]?.jsonPrimitive?.contentOrNull.equals("Bearer", ignoreCase = true)) { "Unsupported credential type." }
+        val access = json["access_token"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        require(access.isNotBlank()) { "No access token was granted." }
+        val expiry = json["expires_in"]?.jsonPrimitive?.longOrNull ?: error("Missing access-token expiry.")
+        val refresh = json["refresh_token"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: previous.refreshToken
+        val idToken = json["id_token"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: previous.idToken
+        val scopes = json["scope"]?.jsonPrimitive?.contentOrNull
+            ?.split(' ')?.filter { it.isNotBlank() }?.toSet()?.takeIf { it.isNotEmpty() }
+            ?: previous.scopes
+        return previous.copy(accessToken = access, refreshToken = refresh, idToken = idToken, scopes = scopes, expiresAt = nowMs + expiry * 1000)
+    }
 }
 
 class ChatGptAuth(private val vault: CredentialStore) {
@@ -53,8 +66,8 @@ class ChatGptAuth(private val vault: CredentialStore) {
     val state = mutable.asStateFlow()
     private val mutex = Mutex()
     private val resource = "https://api.openai.com/v1"
-    private fun save(value: Connections) { vault.write(value); mutable.value = value }
-    private fun upsert(account: Account, active: Boolean = false) {
+    private suspend fun save(value: Connections) { withContext(Dispatchers.IO) { vault.write(value) }; mutable.value = value }
+    private suspend fun upsert(account: Account, active: Boolean = false) {
         val current = mutable.value
         save(current.copy(accounts = current.accounts.filterNot { it.clientId == account.clientId } + account,
             activeClientId = if (active) account.clientId else current.activeClientId))
@@ -63,63 +76,94 @@ class ChatGptAuth(private val vault: CredentialStore) {
         require(mutable.value.accounts.any { it.clientId == clientId })
         save(mutable.value.copy(activeClientId = clientId))
     }
+    suspend fun selectModel(modelId: String, modelLabel: String = "") = mutex.withLock {
+        mutable.value.active?.let { upsert(it.copy(selectedModel = modelId, selectedModelLabel = modelLabel)) }
+    }
     suspend fun acknowledgeWelcome() = mutex.withLock { mutable.value.active?.let { upsert(it.copy(welcomed = true)) } }
 
     suspend fun signIn(existing: Account?, openBrowser: (String) -> Unit, awaitForeground: suspend () -> Unit) = mutex.withLock {
         withContext(Dispatchers.IO) {
-            withTimeout(300_000) {
-                ServerSocket(0, 8, InetAddress.getByName("127.0.0.1")).use { server ->
-                    server.soTimeout = 1000
-                    val redirect = "http://127.0.0.1:${server.localPort}/auth/callback"
-                    val state = OAuthRules.random(); val nonce = OAuthRules.random(); val verifier = OAuthRules.random()
-                    val url = "https://auth.openai.com/api/accounts/authorize".toHttpUrl().newBuilder()
-                        .addQueryParameter("client_id", existing?.clientId ?: "dynamic_agent_client")
-                        .addQueryParameter("ext_agent_host_id", mutable.value.hostId)
-                        .addQueryParameter("response_type", "code").addQueryParameter("redirect_uri", redirect)
-                        .addQueryParameter("scope", "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct")
-                        .addQueryParameter("resource", resource).addQueryParameter("state", state).addQueryParameter("nonce", nonce)
-                        .addQueryParameter("code_challenge_method", "S256").addQueryParameter("code_challenge", OAuthRules.challenge(verifier))
-                    if (existing == null) url.addQueryParameter("agent_name_hint", "Roundlight")
-                    else {
-                        if (existing.idToken.isNotBlank()) url.addQueryParameter("id_token_hint", existing.idToken)
-                        if (existing.email.isNotBlank()) url.addQueryParameter("login_hint", existing.email)
-                        if (!existing.canUsePlan) url.addQueryParameter("prompt", "consent")
-                    }
-                    withContext(Dispatchers.Main) { openBrowser(url.build().toString()) }
-                    var callback: Pair<String, String>? = null
-                    while (callback == null) {
-                        ensureActive()
-                        val socket = try { server.accept() } catch (_: SocketTimeoutException) { continue }
-                        socket.use { client ->
-                            client.soTimeout = 1500
-                            val input = client.getInputStream().bufferedReader()
-                            val line = buildString {
-                                while (length < 8192) { val next = input.read(); if (next == -1 || next == 10) break; append(next.toChar()) }
-                            }.trim()
-                            val parts = line.split(' ')
-                            val uri = runCatching { URI(parts.getOrElse(1) { "" }) }.getOrNull()
-                            if (parts.firstOrNull() == "GET" && uri?.path == "/auth/callback") {
-                                callback = OAuthRules.callback(uri.rawQuery.orEmpty(), state, existing?.clientId)
-                                val html = "<!doctype html><meta name='viewport' content='width=device-width'><title>Roundlight</title><body style='font-family:system-ui;padding:40px;background:#f7f4ed;color:#183e37'><h1>Return to Roundlight</h1><p>Sign-in received. Return to Roundlight to finish connecting your account.</p></body>"
-                                val bytes = html.toByteArray()
-                                client.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n").toByteArray() + bytes)
-                            } else client.getOutputStream().write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+            try {
+                withTimeout(300_000) {
+                    ServerSocket(0, 8, InetAddress.getByName("127.0.0.1")).use { server ->
+                        server.soTimeout = 1000
+                        val redirect = "http://127.0.0.1:${server.localPort}/auth/callback"
+                        val state = OAuthRules.random(); val nonce = OAuthRules.random(); val verifier = OAuthRules.random()
+                        val url = "https://auth.openai.com/api/accounts/authorize".toHttpUrl().newBuilder()
+                            .addQueryParameter("client_id", existing?.clientId ?: "dynamic_agent_client")
+                            .addQueryParameter("ext_agent_host_id", mutable.value.hostId)
+                            .addQueryParameter("response_type", "code").addQueryParameter("redirect_uri", redirect)
+                            .addQueryParameter("scope", "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct")
+                            .addQueryParameter("resource", resource).addQueryParameter("state", state).addQueryParameter("nonce", nonce)
+                            .addQueryParameter("code_challenge_method", "S256").addQueryParameter("code_challenge", OAuthRules.challenge(verifier))
+                        if (existing == null) url.addQueryParameter("agent_name_hint", "Roundlight")
+                        else {
+                            if (existing.idToken.isNotBlank()) url.addQueryParameter("id_token_hint", existing.idToken)
+                            if (existing.email.isNotBlank()) url.addQueryParameter("login_hint", existing.email)
+                            if (!existing.canUsePlan) url.addQueryParameter("prompt", "consent")
                         }
+                        withContext(Dispatchers.Main) { openBrowser(url.build().toString()) }
+                        var callback: Pair<String, String>? = null
+                        while (callback == null) {
+                            ensureActive()
+                            val socket = try { server.accept() } catch (_: SocketTimeoutException) { continue }
+                            socket.use { client ->
+                                try {
+                                    client.soTimeout = 1500
+                                    val input = client.getInputStream().bufferedReader()
+                                    val line = buildString {
+                                        while (length < 8192) { val next = input.read(); if (next == -1 || next == 10) break; append(next.toChar()) }
+                                    }.trim()
+                                    if (line.isEmpty()) return@use
+                                    // Drain remaining headers so closing doesn't send TCP RST to the browser.
+                                    var headerLines = 0
+                                    while (headerLines < 64) {
+                                        val h = input.readLine() ?: break
+                                        if (h.isEmpty()) break
+                                        headerLines++
+                                    }
+                                    val parts = line.split(' ')
+                                    val uri = runCatching { URI(parts.getOrElse(1) { "" }) }.getOrNull()
+                                    val out = client.getOutputStream()
+                                    if (parts.firstOrNull() == "GET" && uri?.path == "/auth/callback") {
+                                        val parsed = runCatching { OAuthRules.callback(uri.rawQuery.orEmpty(), state, existing?.clientId) }
+                                        val html = if (parsed.isSuccess) {
+                                            "<!doctype html><meta name='viewport' content='width=device-width'><title>Roundlight</title><body style='font-family:system-ui;padding:40px;background:#f7f4ed;color:#183e37'><h1>Return to Roundlight</h1><p>Sign-in received. Return to Roundlight to finish connecting your account.</p></body>"
+                                        } else {
+                                            "<!doctype html><meta name='viewport' content='width=device-width'><title>Roundlight</title><body style='font-family:system-ui;padding:40px;background:#f7f4ed;color:#183e37'><h1>Sign-in did not complete</h1><p>Return to Roundlight to try again.</p></body>"
+                                        }
+                                        val bytes = html.toByteArray(Charsets.UTF_8)
+                                        runCatching {
+                                            out.write(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n").toByteArray(Charsets.US_ASCII) + bytes)
+                                            out.flush()
+                                        }
+                                        callback = parsed.getOrThrow()
+                                    } else {
+                                        out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
+                                        out.flush()
+                                    }
+                                } catch (_: IOException) {
+                                    // Ignore idle/speculative browser sockets and keep waiting for the callback.
+                                }
+                            }
+                        }
+                        val (code, clientId) = callback
+                        // Preserve registration even if the one-time code expires before exchange.
+                        if (existing == null) upsert(Account(clientId), active = mutable.value.activeClientId == null)
+                        // Finish the remote exchange only after returning from the browser.
+                        // Android/OEM background restrictions can otherwise surface as DNS failures.
+                        awaitForeground()
+                        val token = tokenRequest(FormBody.Builder().add("grant_type", "authorization_code").add("client_id", clientId)
+                            .add("code", code).add("code_verifier", verifier).add("redirect_uri", redirect).add("resource", resource).build())
+                        val idToken = token["id_token"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: error("ChatGPT did not provide an identity token.")
+                        val identity = verifyIdentity(idToken, clientId, nonce)
+                        require(existing == null || existing.subject.isBlank() || existing.subject == identity.first) { "Sign-in returned a different ChatGPT account." }
+                        val account = OAuthRules.applyTokens(token, (existing ?: Account(clientId)).copy(subject = identity.first, email = identity.second))
+                        upsert(account, active = true)
                     }
-                    val (code, clientId) = callback
-                    // Preserve registration even if the one-time code expires before exchange.
-                    if (existing == null) upsert(Account(clientId))
-                    // Finish the remote exchange only after returning from the browser.
-                    // Android/OEM background restrictions can otherwise surface as DNS failures.
-                    awaitForeground()
-                    val token = tokenRequest(FormBody.Builder().add("grant_type", "authorization_code").add("client_id", clientId)
-                        .add("code", code).add("code_verifier", verifier).add("redirect_uri", redirect).add("resource", resource).build())
-                    val idToken = token["id_token"]?.jsonPrimitive?.content ?: error("ChatGPT did not provide an identity token.")
-                    val identity = verifyIdentity(idToken, clientId, nonce)
-                    require(existing == null || existing.subject.isBlank() || existing.subject == identity.first) { "Sign-in returned a different ChatGPT account." }
-                    val account = tokens(token, (existing ?: Account(clientId)).copy(subject = identity.first, email = identity.second))
-                    upsert(account, active = true)
                 }
+            } catch (_: TimeoutCancellationException) {
+                throw IllegalStateException("ChatGPT sign-in timed out. Try again and return to Roundlight promptly.")
             }
         }
     }
@@ -141,27 +185,16 @@ class ChatGptAuth(private val vault: CredentialStore) {
         require(claims.expirationTime != null && claims.expirationTime.time > System.currentTimeMillis()) { "Identity token expired." }
         require(claims.notBeforeTime == null || claims.notBeforeTime.time <= System.currentTimeMillis() + 30_000) { "Identity is not valid yet." }
         require(claims.getStringClaim("nonce") == nonce && !claims.subject.isNullOrBlank()) { "Identity verification failed." }
-        return claims.subject to claims.getStringClaim("email").orEmpty()
+        return claims.subject to runCatching { claims.getStringClaim("email") }.getOrNull().orEmpty()
     }
     private suspend fun tokenRequest(body: FormBody) = requestJson(defaultHttp, Request.Builder().url("https://auth.openai.com/api/accounts/oauth/token").post(body).build())
-    private fun tokens(json: JsonObject, previous: Account): Account {
-        require(json["token_type"]?.jsonPrimitive?.content.equals("Bearer", ignoreCase = true)) { "Unsupported credential type." }
-        val access = json["access_token"]?.jsonPrimitive?.content.orEmpty()
-        require(access.isNotBlank()) { "No access token was granted." }
-        val expiry = json["expires_in"]?.jsonPrimitive?.longOrNull ?: error("Missing access-token expiry.")
-        return previous.copy(accessToken = access,
-            refreshToken = json["refresh_token"]?.jsonPrimitive?.content ?: previous.refreshToken,
-            idToken = json["id_token"]?.jsonPrimitive?.content ?: previous.idToken,
-            scopes = json["scope"]?.jsonPrimitive?.content?.split(' ')?.filter { it.isNotBlank() }?.toSet() ?: previous.scopes,
-            expiresAt = System.currentTimeMillis() + expiry * 1000)
-    }
     suspend fun accessToken(): String = mutex.withLock {
         var account = mutable.value.active ?: error("Connect your ChatGPT account first.")
-        check(account.canUsePlan) { "Enable ChatGPT plan usage in Account before scanning." }
+        check(account.canUsePlan) { "Enable ChatGPT plan usage in Account before composing." }
         if (account.expiresAt < System.currentTimeMillis() + 60_000) {
             check(account.refreshToken.isNotBlank()) { "Continue with ChatGPT to reconnect." }
             try {
-                account = tokens(tokenRequest(FormBody.Builder().add("grant_type", "refresh_token").add("client_id", account.clientId)
+                account = OAuthRules.applyTokens(tokenRequest(FormBody.Builder().add("grant_type", "refresh_token").add("client_id", account.clientId)
                     .add("refresh_token", account.refreshToken).add("resource", resource).build()), account)
                 upsert(account)
             } catch (e: ServiceFailure) {
@@ -190,7 +223,7 @@ class ChatGptAuth(private val vault: CredentialStore) {
                 }
             }
         } catch (e: CancellationException) { throw e } catch (_: Exception) { /* Report unconfirmed revocation, never token data. */ }
-        finally { upsert(account.withoutTokens()) }
+        finally { withContext(NonCancellable) { upsert(account.withoutTokens()) } }
         revoked
     }
 }

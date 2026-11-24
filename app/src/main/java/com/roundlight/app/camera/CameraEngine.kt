@@ -16,12 +16,14 @@ import java.io.File
 import java.util.UUID
 import kotlin.math.*
 
-data class Lens(val cameraId: String,val physicalId: String?,val label: String,val chars: CameraCharacteristics) {
+data class Lens(val cameraId: String,val physicalId: String?,val label: String,val chars: CameraCharacteristics,val physicalRequestKeys: Set<CaptureRequest.Key<*>> = emptySet()) {
     val key get() = cameraId+":"+physicalId.orEmpty()
     val sizes get() = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.getOutputSizes(ImageFormat.JPEG).orEmpty().sortedByDescending { it.width.toLong()*it.height }
     val rawSize get() = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull { it.width.toLong()*it.height }
     val apertures get() = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES) ?: floatArrayOf()
-    val manual get() = (chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()).contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
+    val manual get() = (chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()).contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) &&
+        chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) != null &&
+        chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) != null
     val aeLock get() = chars.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE)==true
     val awbLock get() = chars.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE)==true
     val wbModes get() = chars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) ?: intArrayOf()
@@ -47,22 +49,27 @@ class CameraEngine(private val context: Context,private val tempDir: File,privat
             fun label(ch: CameraCharacteristics,suffix: String): String { val focal=ch.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull(); return "$facing · ${focal?.let { "%.1f mm".format(it) } ?: "Camera"} $suffix" }
             if(c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.getOutputSizes(ImageFormat.JPEG)?.isNotEmpty()==true)
                 result+=Lens(id,null,label(c,"($id)"),c)
+            val physicalKeys = c.availablePhysicalCameraRequestKeys?.toSet().orEmpty()
             c.physicalCameraIds.filter { it !in ids }.forEach { physical ->
                 try { val pc=manager.getCameraCharacteristics(physical); if(pc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.getOutputSizes(ImageFormat.JPEG)?.isNotEmpty()==true)
-                    result+=Lens(id,physical,label(pc,"· lens $physical"),pc)
+                    result+=Lens(id,physical,label(pc,"· lens $physical"),pc,physicalKeys)
                 } catch(e:Exception) { log.failure("camera.physical",e) }
             }
         }
         return result
     }
     fun open(view: TextureView,choice: Lens,config: CameraSettings) {
-        preview=view; lens=choice; settings=config.copy(locked=false); closed=false
-        if(view.isAvailable) handler.post { openInternal() }
-        else view.surfaceTextureListener=object: TextureView.SurfaceTextureListener {
+        closed=false
+        view.surfaceTextureListener=object: TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(t: SurfaceTexture,w: Int,h: Int) { handler.post { openInternal() } }
             override fun onSurfaceTextureSizeChanged(t: SurfaceTexture,w: Int,h: Int) { orientPreview() }
             override fun onSurfaceTextureDestroyed(t: SurfaceTexture): Boolean { close(); return true }
             override fun onSurfaceTextureUpdated(t: SurfaceTexture) {}
+        }
+        val available = view.isAvailable
+        handler.post {
+            preview=view; lens=choice; settings=config.copy(locked=false)
+            if (available) openInternal()
         }
     }
     @SuppressLint("MissingPermission") private fun openInternal() {
@@ -113,12 +120,25 @@ class CameraEngine(private val context: Context,private val tempDir: File,privat
         // fixed portrait window. Applying sensor rotation again turns the viewfinder sideways.
         view.post { view.setTransform(Matrix()) }
     }
+    private fun physicalResult(result: TotalCaptureResult, physicalId: String?): CaptureResult {
+        if (physicalId == null) return result
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            result.physicalCameraTotalResults[physicalId] ?: result
+        } else {
+            @Suppress("DEPRECATION")
+            result.physicalCameraResults[physicalId] ?: result
+        }
+    }
+    private fun validGains(gains: RggbChannelVector?): Boolean {
+        if (gains == null) return false
+        return listOf(gains.red, gains.greenEven, gains.greenOdd, gains.blue).all { it.isFinite() && it > 0f }
+    }
     private fun apply(builder: CaptureRequest.Builder) {
         val choice=lens ?: return; val ch=choice.chars
         fun <T> set(key: CaptureRequest.Key<T>,value: T) {
             builder.set(key,value)
             val physical=choice.physicalId
-            if(physical!=null && manager.getCameraCharacteristics(choice.cameraId).availablePhysicalCameraRequestKeys?.contains(key)==true) builder.setPhysicalCameraKey(key,value,physical)
+            if(physical!=null && key in choice.physicalRequestKeys) builder.setPhysicalCameraKey(key,value,physical)
         }
         set(CaptureRequest.CONTROL_MODE,CaptureRequest.CONTROL_MODE_AUTO)
         val af=ch.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
@@ -132,13 +152,20 @@ class CameraEngine(private val context: Context,private val tempDir: File,privat
             ch.get(CameraCharacteristics.SENSOR_INFO_MAX_FRAME_DURATION)?.let { set(CaptureRequest.SENSOR_FRAME_DURATION,max(exposure,33_333_333L).coerceAtMost(it)) }
         } else { set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_ON); if(choice.aeLock)set(CaptureRequest.CONTROL_AE_LOCK,settings.locked) }
         settings.aperture?.takeIf { aperture -> choice.apertures.any { it==aperture } }?.let { set(CaptureRequest.LENS_APERTURE,it) }
-        if(settings.locked && lockedGains!=null && (ch.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()).contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING)) {
-            set(CaptureRequest.CONTROL_AWB_MODE,CaptureRequest.CONTROL_AWB_MODE_OFF)
-            set(CaptureRequest.COLOR_CORRECTION_MODE,CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
-            set(CaptureRequest.COLOR_CORRECTION_GAINS,lockedGains!!); lockedTransform?.let { set(CaptureRequest.COLOR_CORRECTION_TRANSFORM,it) }
+        val manualPost = (ch.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()).contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING)
+        val gains = lockedGains
+        if (settings.wb != CaptureRequest.CONTROL_AWB_MODE_AUTO) {
+            set(CaptureRequest.CONTROL_AWB_MODE, settings.wb)
+            if (choice.awbLock) set(CaptureRequest.CONTROL_AWB_LOCK, false)
+        } else if (choice.awbLock) {
+            set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            set(CaptureRequest.CONTROL_AWB_LOCK, settings.locked)
+        } else if (settings.locked && gains != null && manualPost) {
+            set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
+            set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+            set(CaptureRequest.COLOR_CORRECTION_GAINS, gains); lockedTransform?.let { set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, it) }
         } else {
-            set(CaptureRequest.CONTROL_AWB_MODE,settings.wb)
-            if(choice.awbLock)set(CaptureRequest.CONTROL_AWB_LOCK,settings.locked && settings.wb==CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            set(CaptureRequest.CONTROL_AWB_MODE, settings.wb)
         }
     }
     private fun repeatPreview() {
@@ -155,12 +182,19 @@ class CameraEngine(private val context: Context,private val tempDir: File,privat
     fun lock(onLocked: (CameraSettings)->Unit) { handler.post {
         val choice=lens ?: return@post; val result=last
         if(result==null){failed("Wait for the preview to settle before locking.");return@post}
-        val measured=choice.physicalId?.let { result.physicalCameraResults[it] } ?: result
-        lockedGains=measured.get(CaptureResult.COLOR_CORRECTION_GAINS); lockedTransform=measured.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
-        settings=settings.copy(locked=true,manual=choice.manual,iso=measured.get(CaptureResult.SENSOR_SENSITIVITY) ?: settings.iso,
-            exposureNs=measured.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: settings.exposureNs,aperture=measured.get(CaptureResult.LENS_APERTURE) ?: settings.aperture)
+        val measured=physicalResult(result,choice.physicalId)
+        val measuredGains=measured.get(CaptureResult.COLOR_CORRECTION_GAINS)
+        lockedGains=measuredGains.takeIf(::validGains); lockedTransform=measured.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
+        val keepManual = settings.manual && choice.manual
+        settings=settings.copy(
+            locked=true,
+            manual=choice.manual,
+            iso=if(keepManual) settings.iso else measured.get(CaptureResult.SENSOR_SENSITIVITY) ?: settings.iso,
+            exposureNs=if(keepManual) settings.exposureNs else measured.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: settings.exposureNs,
+            aperture=measured.get(CaptureResult.LENS_APERTURE) ?: settings.aperture
+        )
         log.event("camera.locked",mapOf("iso" to settings.iso,"exposureNs" to settings.exposureNs,"manual" to if(choice.manual)1 else 0,"wbLock" to if(choice.awbLock)1 else 0))
-        repeatPreview(); onLocked(settings); status(if(choice.awbLock || lockedGains!=null)"Exposure and white balance locked" else "Exposure fixed · use a fixed white-balance preset")
+        repeatPreview(); onLocked(settings); status(if(settings.wb!=CaptureRequest.CONTROL_AWB_MODE_AUTO || choice.awbLock || lockedGains!=null)"Exposure and white balance locked" else "Exposure fixed · use a fixed white-balance preset")
     } }
     fun capture() { handler.post {
         if(pending!=null)return@post
@@ -184,7 +218,7 @@ class CameraEngine(private val context: Context,private val tempDir: File,privat
         try {
             val timestamp=result.get(CaptureResult.SENSOR_TIMESTAMP)
             require(timestamp==null || (task.jpegTime==timestamp && (task.raw==null || task.raw!!.timestamp==timestamp))) { "Frame timestamp mismatch" }
-            val choice=lens!!; val metadata=choice.physicalId?.let { result.physicalCameraResults[it] } ?: result
+            val choice=lens!!; val metadata=physicalResult(result,choice.physicalId)
             if(task.raw!=null) {
                 rawFile=File(tempDir,"${task.id}.dng")
                 DngCreator(choice.chars,metadata).use { dng ->
@@ -192,7 +226,10 @@ class CameraEngine(private val context: Context,private val tempDir: File,privat
                     rawFile.outputStream().use { dng.writeImage(it,task.raw!!) }
                 }
             }
-            val info="${choice.label} · ISO ${metadata.get(CaptureResult.SENSOR_SENSITIVITY)} · ${metadata.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.div(1_000_000f)} ms · f/${metadata.get(CaptureResult.LENS_APERTURE)} · WB ${settings.wb} · locked ${settings.locked}"
+            val isoText = metadata.get(CaptureResult.SENSOR_SENSITIVITY)?.toString() ?: "auto"
+            val expText = metadata.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { "%.2f ms".format(it / 1_000_000f) } ?: "auto"
+            val apText = metadata.get(CaptureResult.LENS_APERTURE)?.let { "f/$it" } ?: "f/—"
+            val info="${choice.label} · ISO $isoText · $expText · $apText · WB ${settings.wb} · locked ${settings.locked}"
             task.raw?.close(); task.raw=null; pending=null; captured(bytes,rawFile,info)
         } catch(e:Exception) { rawFile?.delete();discard();log.failure("camera.save",e);failed("Could not finish saving this frame. Try JPEG if RAW repeatedly fails.") }
     }

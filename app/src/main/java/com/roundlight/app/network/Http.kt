@@ -27,8 +27,13 @@ class ServiceFailure(val status: Int, val code: String, val requestId: String = 
         }
         fun from(status: Int, body: JsonObject?, requestId: String = ""): ServiceFailure {
             val error = body?.get("error")
-            val code = if (error is JsonObject) error["code"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                else (error as? JsonPrimitive)?.contentOrNull ?: body?.get("code")?.jsonPrimitive?.contentOrNull.orEmpty()
+            val code = if (error is JsonObject) {
+                error["code"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    ?: error["type"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            } else {
+                (error as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+                    ?: body?.get("code")?.jsonPrimitive?.contentOrNull.orEmpty()
+            }
             return ServiceFailure(status, code, requestId, (error as? JsonObject)?.get("param")?.jsonPrimitive?.contentOrNull.orEmpty())
         }
     }
@@ -77,19 +82,20 @@ object ResponseStream {
             if (eventData.isEmpty()) return
             val data = eventData.toString().trimEnd('\n'); eventData.clear()
             if (data == "[DONE]") return
-            val event = Json.parseToJsonElement(data).jsonObject
-            when (event["type"]?.jsonPrimitive?.content) {
-                "response.output_text.delta" -> deltas.append(event["delta"]?.jsonPrimitive?.content.orEmpty())
+            val event = runCatching { Json.parseToJsonElement(data).jsonObject }.getOrNull()
+                ?: throw IOException("OpenAI returned an unreadable stream event.")
+            when (event["type"]?.jsonPrimitive?.contentOrNull) {
+                "response.output_text.delta" -> deltas.append(event["delta"]?.jsonPrimitive?.contentOrNull.orEmpty())
                 "response.refusal.delta", "response.refusal.done" -> throw IOException("The model declined this image. Try a different photo.")
                 "response.failed", "error" -> throw ServiceFailure.from(400, (event["response"] as? JsonObject) ?: event, requestId)
                 "response.incomplete" -> throw IOException("Analysis stopped before it finished. No composition was saved; try again.")
                 "response.completed" -> {
-                    val response = event["response"]?.jsonObject ?: throw IOException("Missing completed response.")
-                    require(response["status"]?.jsonPrimitive?.content == "completed") { "Response did not complete." }
+                    val response = event["response"] as? JsonObject ?: throw IOException("Missing completed response.")
+                    require(response["status"]?.jsonPrimitive?.contentOrNull == "completed") { "Response did not complete." }
                     val parts = response["output"]?.jsonArray.orEmpty().flatMap { (it as? JsonObject)?.get("content")?.jsonArray.orEmpty() }
-                    if (parts.any { it.jsonObject["type"]?.jsonPrimitive?.content == "refusal" }) throw IOException("The model declined this photo.")
-                    output = parts.filter { it.jsonObject["type"]?.jsonPrimitive?.content == "output_text" }
-                        .joinToString("") { it.jsonObject["text"]?.jsonPrimitive?.content.orEmpty() }.ifBlank { deltas.toString() }
+                    if (parts.any { (it as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull == "refusal" }) throw IOException("The model declined this photo.")
+                    output = parts.filter { (it as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull == "output_text" }
+                        .joinToString("") { (it as? JsonObject)?.get("text")?.jsonPrimitive?.contentOrNull.orEmpty() }.ifBlank { deltas.toString() }
                     completed = true
                 }
             }

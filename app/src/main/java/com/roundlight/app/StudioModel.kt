@@ -35,36 +35,62 @@ class StudioModel(app: Application): AndroidViewModel(app) {
     var previewError by mutableStateOf<String?>(null); private set
     var solo by mutableStateOf(false)
     var models by mutableStateOf<List<ModelChoice>>(emptyList()); private set
-    var model by mutableStateOf("")
+    var model by mutableStateOf(auth.state.value.active?.takeIf { it.connected }?.selectedModel.orEmpty())
+    val selectedModelLabel: String
+        get() = models.firstOrNull { it.id == model }?.label
+            ?: auth.state.value.active?.selectedModelLabel?.takeIf { it.isNotBlank() }
+            ?: model
     var style by mutableStateOf("Natural · recognizable subject, soft surrounding texture")
     var lenses by mutableStateOf<List<Lens>>(emptyList()); private set
     var lensKey by mutableStateOf("")
     var cameraSettings by mutableStateOf(CameraSettings())
+    private var accountReturnScreen = "home"
     private var operation: Job?=null; private var previewJob: Job?=null
     private val saves=Channel<Pair<Project?,CompletableDeferred<Unit>>>(Channel.UNLIMITED)
     private val history=ArrayDeque<Project>(); var undoCount by mutableIntStateOf(0); private set
     private val context=app
     val camera=CameraEngine(app,app.cacheDir,log,{ value -> viewModelScope.launch { cameraStatus=value } },{ bytes,raw,info ->
-        viewModelScope.launch { val current=project
-            try { if(current!=null){persist(null);val ready=current.copy(cameraKey=lensKey,captureWidth=cameraSettings.size.width,captureHeight=cameraSettings.size.height,captureRaw=cameraSettings.raw)
-                val saved=withContext(Dispatchers.IO){store.addCapture(ready,bytes,raw,info)};project=saved;reload();cameraStatus="${saved.frames.size} frames saved · move a little around your subject"} else raw?.delete() }
-            catch(e:Exception){raw?.delete();showError("capture",e)} finally{capturing=false}
+        viewModelScope.launch {
+            try {
+                persist(null)
+                val current=project
+                if(current!=null){
+                    val ready=current.copy(cameraKey=lensKey,captureWidth=cameraSettings.size.width,captureHeight=cameraSettings.size.height,captureRaw=cameraSettings.raw)
+                    val saved=withContext(Dispatchers.IO){store.addCapture(ready,bytes,raw,info)}
+                    project=saved;reload();cameraStatus="${saved.frames.size} frames saved · move a little around your subject"
+                } else raw?.delete()
+            } catch(e:Exception){raw?.delete();showError("capture",e)} finally{capturing=false}
         }
     },{ reason -> viewModelScope.launch { capturing=false;message=reason;cameraStatus=reason } })
     init {
         viewModelScope.launch { for((p,done) in saves) { try { if(p!=null)withContext(Dispatchers.IO){store.save(p)};done.complete(Unit) }catch(e:Exception){done.completeExceptionally(e);showError("project.save",e)} } }
         viewModelScope.launch { reload() }
-        viewModelScope.launch { auth.state.map { it.activeClientId to it.active?.connected }.distinctUntilChanged().collect { models=emptyList();model="" } }
+        viewModelScope.launch {
+            var lastKey: Pair<String?, Boolean>? = null
+            auth.state.map { it.activeClientId to (it.active?.connected == true) }.distinctUntilChanged().collect { key ->
+                val active = auth.state.value.active
+                if (lastKey != null && lastKey != key) models = emptyList()
+                model = active?.takeIf { it.connected }?.selectedModel.orEmpty()
+                lastKey = key
+            }
+        }
     }
     private suspend fun persist(p:Project?){val done=CompletableDeferred<Unit>();saves.send(p to done);done.await()}
     private suspend fun reload() { projects=withContext(Dispatchers.IO){store.list()} }
-    fun run(label: String,block: suspend ()->Unit) {
+    fun run(label: String,block: suspend ((String)->Unit)->Unit) {
         if(busy!=null)return
-        operation=viewModelScope.launch {
-            busy=label
-            try { persist(null);block() } catch(e:CancellationException) { log.event("work.cancelled");throw e }
-            catch(e:Exception){showError("work",e)} finally {busy=null}
+        busy=label
+        val job=viewModelScope.launch(start=CoroutineStart.LAZY) {
+            val current=coroutineContext[Job]
+            val setStatus:(String)->Unit={ text ->
+                viewModelScope.launch(Dispatchers.Main.immediate) {
+                    if(operation===current && current?.isActive==true && busy!=null)busy=text
+                }
+            }
+            try { persist(null);block(setStatus) } catch(e:CancellationException) { log.event("work.cancelled");throw e }
+            catch(e:Exception){showError("work",e)} finally { if(operation===current){busy=null;operation=null} }
         }
+        operation=job; job.start()
     }
     private fun showError(stage:String,error:Exception) {
         log.failure(stage,error)
@@ -78,13 +104,29 @@ class StudioModel(app: Application): AndroidViewModel(app) {
         }
     }
     fun cancel(){operation?.cancel();capturing=false}
-    fun newShoot(name:String){run("Creating shoot…") { project=withContext(Dispatchers.IO){store.create(name)};history.clear();undoCount=0;selected=0;screen="shoot";reload() }}
-    fun open(p:Project){project=p;selected=0;history.clear();undoCount=0;solo=false;screen="shoot";refreshPreview()}
+    fun openAccount(){if(screen!="account")accountReturnScreen=if(screen=="capture")"shoot" else screen;screen="account"}
+    fun openShoot(){solo=false;screen="shoot";refreshPreview()}
+    fun openEdit(){screen="edit";refreshPreview()}
+    fun goBack(){
+        when(screen){
+            "capture","edit"->{solo=false;screen="shoot";refreshPreview()}
+            "account"->{
+                val target=if(accountReturnScreen in setOf("shoot","edit") && project!=null)accountReturnScreen else "home"
+                screen=target;if(target=="shoot" || target=="edit")refreshPreview()
+            }
+            else->{screen="home"}
+        }
+    }
+    fun newShoot(name:String){run("Creating shoot…") {
+        previewJob?.cancel();preview=null;previewError=null;solo=false;lensKey=""
+        project=withContext(Dispatchers.IO){store.create(name)};history.clear();undoCount=0;selected=0;screen="shoot";reload()
+    }}
+    fun open(p:Project){val fresh=projects.find{it.id==p.id} ?: p;project=fresh;selected=0;history.clear();undoCount=0;solo=false;preview=null;previewError=null;screen="shoot";refreshPreview()}
     fun demo(){run("Drawing the illustrated study…") { val p=withContext(Dispatchers.IO){Demo.create(store)};open(p);screen="edit";reload() }}
     fun edit(next:Project,remember:Boolean=true){
         if(busy!=null)return
         if(remember)project?.let { history.addLast(it);while(history.size>30)history.removeFirst();undoCount=history.size }
-        project=next; saves.trySend(next to CompletableDeferred());refreshPreview()
+        project=next;projects=projects.map{if(it.id==next.id)next else it};saves.trySend(next to CompletableDeferred());refreshPreview()
     }
     private suspend fun applyWork(next:Project){
         persist(next)
@@ -100,36 +142,91 @@ class StudioModel(app: Application): AndroidViewModel(app) {
             catch(e:CancellationException){throw e}catch(e:Exception){preview=null;previewError=e.message?.take(160) ?: "Preview unavailable";log.failure("preview",e)}finally{renderBusy=false}
         }
     }
-    fun import(uris:List<Uri>){val start=project ?: return;run("Importing photos…"){
+    fun import(uris:List<Uri>){val start=project ?: return;run("Importing photos…"){ setStatus ->
         var p=start
-        for((i,uri) in uris.withIndex()){busy="Importing ${i+1} of ${uris.size}…";p=withContext(Dispatchers.IO){store.import(p,uri)};project=p}
-        reload();refreshPreview()
+        try {
+            for((i,uri) in uris.withIndex()){setStatus("Importing ${i+1} of ${uris.size}…");p=withContext(Dispatchers.IO){store.import(p,uri)};project=p}
+        } finally {
+            if(p!==start){withContext(NonCancellable){reload()};refreshPreview()}
+        }
     }}
-    fun align(){val p=project ?: return;run("Aligning subject…") { val next=withContext(Dispatchers.Default){renderer.align(p){percent->viewModelScope.launch{busy="Aligning subject · $percent%"}}};applyWork(next);screen="edit";message=if(next.frames.any{it.confidence<.30f})"Some frames could not be aligned confidently. They were left in place; use the layer alignment controls." else "Subject alignment complete. Background variation has been preserved." }}
-    fun aiCompose(){val p=project ?: return;if(model.isBlank()){message="Connect your account and choose an image-capable model in Account first.";return}
-        val chosen=model;run("Preparing AI art direction…"){
-            val aligned=withContext(Dispatchers.Default){renderer.align(p)}
-            val next=withContext(Dispatchers.Default){ai.compose(aligned,chosen,style){label->viewModelScope.launch{busy=label}}}
+    fun align(){val p=project ?: return;run("Aligning subject…") { setStatus ->
+        val next=withContext(Dispatchers.Default){renderer.align(p){percent->setStatus("Aligning subject · $percent%")}}
+        applyWork(next);screen="edit";message=if(next.frames.any{it.confidence<.30f})"Some frames could not be aligned confidently. They were left in place; use the layer alignment controls." else "Subject alignment complete. Background variation has been preserved."
+    }}
+    fun aiCompose(){
+        val p=project ?: return
+        val active=auth.state.value.active
+        if(active==null || !active.connected){message="Your ChatGPT account is not connected. Open Account → Continue with ChatGPT to connect.";return}
+        if(!active.canUsePlan){message="ChatGPT plan usage is not authorized yet. Open Account → Continue with ChatGPT to authorize it.";return}
+        run("Preparing AI art direction…"){ setStatus ->
+            var chosen=model.ifBlank { active.selectedModel }
+            if(chosen.isBlank()){
+                setStatus("Loading your available models…")
+                val fetched=withContext(Dispatchers.IO){ai.models()}
+                models=fetched
+                val preferred=fetched.firstOrNull() ?: error("No available models were returned for this account. Open Account to check your plan.")
+                chosen=preferred.id;model=preferred.id;auth.selectModel(preferred.id,preferred.label)
+            }
+            val aligned=withContext(Dispatchers.Default){renderer.align(p){percent->setStatus("Aligning subject · $percent%")}}
+            val next=withContext(Dispatchers.Default){ai.compose(aligned,chosen,style){label->setStatus(label)}}
             applyWork(next);screen="edit"
         }
     }
-    fun export(uri:Uri,edge:Int,png:Boolean){val p=project ?: return;run("Rendering full-quality image…"){
-        val bitmap=withContext(Dispatchers.Default){renderer.render(p,edge){percent->viewModelScope.launch{busy="Rendering export · $percent%"}}}
+    fun export(uri:Uri,edge:Int,png:Boolean){val p=project ?: return;run("Rendering full-quality image…"){ setStatus ->
+        val bitmap=withContext(Dispatchers.Default){renderer.render(p,edge){percent->setStatus("Rendering export · $percent%")}}
         try { withContext(Dispatchers.IO){context.contentResolver.openOutputStream(uri)?.use { check(bitmap.compress(if(png)Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG,97,it)) } ?: throw IOException("Cannot write export")}
             message="Saved ${bitmap.width} × ${bitmap.height} ${if(png)"PNG" else "JPEG"}.";log.event("image.exported",mapOf("width" to bitmap.width,"height" to bitmap.height))
         } finally{bitmap.recycle()}
     }}
     fun archive(uri:Uri){val p=project ?: return;run("Exporting originals and editable recipe…"){withContext(Dispatchers.IO){store.archive(p,uri)};message="Shoot archive saved, including originals, RAW files and the edit recipe."}}
     fun diagnostics(uri:Uri){run("Exporting diagnostics…"){withContext(Dispatchers.IO){context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(log.report()) } ?: throw IOException()};message="Diagnostic log saved."}}
-    fun loadModels(){run("Loading your available models…"){models=ai.models();model=models.firstOrNull()?.id.orEmpty();if(models.isEmpty())message="No available models were returned for this account."}}
-    fun connect(existing:Account?,openBrowser:(String)->Unit){run("Continue in your browser, then return here…"){auth.signIn(existing,openBrowser,gate::awaitResumed);message="Account connected. Load your available models to begin."}}
+    fun selectModel(choice:ModelChoice){
+        model=choice.id
+        viewModelScope.launch { try { auth.selectModel(choice.id,choice.label) } catch(e:Exception){showError("account.model",e)} }
+    }
+    fun loadModels(){run("Loading your available models…"){
+        val fetched=withContext(Dispatchers.IO){ai.models()}
+        models=fetched
+        val preferred=fetched.firstOrNull{it.id==model} ?: fetched.firstOrNull{it.id==auth.state.value.active?.selectedModel} ?: fetched.firstOrNull()
+        if(preferred!=null){model=preferred.id;auth.selectModel(preferred.id,preferred.label)}
+        else {model="";message="No available models were returned for this account."}
+    }}
+    fun connect(existing:Account?,openBrowser:(String)->Unit){run("Continue in your browser, then return here…"){ setStatus ->
+        auth.signIn(existing,openBrowser,gate::awaitResumed)
+        val active=auth.state.value.active
+        if(active?.canUsePlan==true){
+            setStatus("Loading your available models…")
+            try {
+                val fetched=withContext(Dispatchers.IO){ai.models()}
+                models=fetched
+                val preferred=fetched.firstOrNull{it.id==active.selectedModel} ?: fetched.firstOrNull()
+                if(preferred!=null){model=preferred.id;auth.selectModel(preferred.id,preferred.label);message="Account connected and ready with ${preferred.label}."}
+                else message="Account connected, but no available models were returned for this account."
+            } catch(e:CancellationException){throw e}
+            catch(e:Exception){log.failure("models.autoload",e);message="Account connected. Tap Load available models to choose a model."}
+        } else {
+            message="Account connected, but plan usage permission was not granted. Tap Continue with ChatGPT to authorize it."
+        }
+    }}
     fun chooseAccount(id:String){run("Switching account…"){auth.select(id)}}
     fun signOut(){run("Disconnecting account…"){val revoked=auth.signOut();message=if(revoked)"Signed out." else "Local credentials removed. Remote revocation was not confirmed; disconnect Roundlight in ChatGPT settings."}}
-    fun enumerate(){try { lenses=camera.lenses();val p=project
-        if(!p?.cameraKey.isNullOrBlank())lensKey=p!!.cameraKey
-        if(lensKey.isBlank())lensKey=lenses.firstOrNull()?.key.orEmpty();chooseLens(lensKey)
-        if(p!=null && p.captureWidth>0 && p.captureHeight>0)cameraSettings=cameraSettings.copy(size=android.util.Size(p.captureWidth,p.captureHeight),raw=p.captureRaw)
-    }catch(e:Exception){showError("camera.list",e)}}
+    fun enumerate(): Boolean {
+        return try {
+            lenses=camera.lenses()
+            if(lenses.isEmpty()){message="No compatible camera was found on this device. You can still import photos into a shoot.";return false}
+            val p=project
+            val preferred=p?.cameraKey?.takeIf{key->key.isNotBlank() && lenses.any{it.key==key}}
+            lensKey=preferred ?: lensKey.takeIf{key->lenses.any{it.key==key}} ?: lenses.first().key
+            chooseLens(lensKey)
+            if(p!=null && p.captureWidth>0 && p.captureHeight>0){
+                val activeLens=lenses.find{it.key==lensKey}
+                val matched=activeLens?.sizes?.firstOrNull{it.width==p.captureWidth && it.height==p.captureHeight} ?: android.util.Size(p.captureWidth,p.captureHeight)
+                cameraSettings=cameraSettings.copy(size=matched,raw=p.captureRaw && activeLens?.rawSize!=null)
+            }
+            true
+        }catch(e:Exception){showError("camera.list",e);false}
+    }
     fun chooseLens(key:String){lensKey=key;val lens=lenses.find{it.key==key} ?:return
         val size=lens.sizes.filter{it.width.toLong()*it.height<=13_000_000}.firstOrNull() ?:lens.sizes.lastOrNull() ?:return
         cameraSettings=CameraSettings(size=size,aperture=lens.apertures.firstOrNull())
