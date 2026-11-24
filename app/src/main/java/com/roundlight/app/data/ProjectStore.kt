@@ -29,6 +29,18 @@ class ProjectStore(private val context: Context, private val log: Diagnostics) {
         catch (e: Exception) { file.failWrite(stream); throw e }
     }
     fun create(name: String) = Project(name=name.trim().ifBlank { "Untitled orbit" }.take(200)).also(::save)
+    @Synchronized fun rename(p: Project, newName: String): Project {
+        val clean = newName.trim().ifBlank { "Untitled orbit" }.take(200)
+        val updated = p.copy(name = clean)
+        save(updated)
+        log.event("project.renamed")
+        return updated
+    }
+    @Synchronized fun delete(id: String) {
+        val dir = folder(id)
+        if (dir.exists() && !dir.deleteRecursively()) throw IOException("Could not delete the shoot folder.")
+        log.event("project.deleted")
+    }
     fun freeBytes() = root.usableSpace
     fun requireSpace(bytes: Long=80_000_000) { require(freeBytes()>bytes+30_000_000) { "Storage is nearly full. Export your shoots and free space before continuing." } }
     fun addCapture(p: Project, jpeg: ByteArray, raw: File?, metadata: String): Project {
@@ -97,6 +109,25 @@ class ProjectStore(private val context: Context, private val log: Diagnostics) {
             val ratio=min(1f,maxEdge.toFloat()/max(bitmap.width,bitmap.height))
             if(ratio<1f) { val scaled=Bitmap.createScaledBitmap(bitmap,max(1,(bitmap.width*ratio).roundToInt()),max(1,(bitmap.height*ratio).roundToInt()),true); if(scaled!==bitmap) bitmap.recycle(); bitmap=scaled }
             return bitmap
+        }
+        fun isLowLightPhoto(file: File): Boolean {
+            val exifEv = runCatching {
+                val exif = ExifInterface(file)
+                val aperture = exif.getAttributeDouble(ExifInterface.TAG_F_NUMBER, -1.0).takeIf { it > 0.0 }?.toFloat()
+                val exposureSec = exif.getAttributeDouble(ExifInterface.TAG_EXPOSURE_TIME, -1.0).takeIf { it > 0.0 }
+                val iso = exif.getAttributeInt(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, -1).takeIf { it > 0 }
+                    ?: exif.getAttributeInt(ExifInterface.TAG_ISO_SPEED, -1).takeIf { it > 0 }
+                LowLightMath.ev100(aperture, exposureSec, iso)
+            }.getOrNull()
+            if (exifEv != null) return LowLightMath.isLowLightEv(exifEv)
+            return runCatching {
+                val tiny = decode(file, 96)
+                try {
+                    val pixels = IntArray(tiny.width * tiny.height)
+                    tiny.getPixels(pixels, 0, tiny.width, 0, 0, tiny.width, tiny.height)
+                    LowLightMath.isLowLightPixels(pixels)
+                } finally { tiny.recycle() }
+            }.getOrDefault(false)
         }
     }
 }

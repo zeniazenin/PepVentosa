@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Deep matte darkroom obsidian-forest base -->
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="50"
+                android:centerY="46"
+                android:gradientRadius="78"
+                android:startColor="#223029"
+                android:centerColor="#141E1A"
+                android:endColor="#0A0F0D" />
+        </aapt:attr>
+    </path>
+    <!-- Warm analog 35mm film light-leak glow (upper-right) -->
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="84"
+                android:centerY="22"
+                android:gradientRadius="58"
+                android:startColor="#7CE68A5C"
+                android:centerColor="#2CE9B39B"
+                android:endColor="#00E9B39B" />
+        </aapt:attr>
+    </path>
+    <!-- Luminous sage optical spill (lower-left) -->
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="22"
+                android:centerY="84"
+                android:gradientRadius="54"
+                android:startColor="#48D8E6A3"
+                android:centerColor="#18536C56"
+                android:endColor="#00536C56" />
+        </aapt:attr>
+    </path>
+</vector>

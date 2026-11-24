@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Clean vintage lens barrel ring -->
+    <path
+        android:pathData="M54,25.6a28.4,28.4 0 1,0 0,56.8a28.4,28.4 0 1,0 0,-56.8z"
+        android:strokeWidth="2.8"
+        android:strokeColor="#FFFFFF"
+        android:fillColor="#00000000" />
+    <!-- 6-blade mechanical aperture -->
+    <path android:pathData="M55.19,43.06 Q61.71,38.44 72.17,40.9 A22.4,22.4 0 0,1 75.82,59.05 Q71.03,50.57 63.37,48.24 A11,11 0 0,0 55.19,43.06 Z" android:fillColor="#FFFFFF" />
+    <path android:pathData="M64.06,49.56 Q71.33,52.9 74.43,63.18 A22.4,22.4 0 0,1 60.53,75.43 Q65.48,67.03 63.67,59.24 A11,11 0 0,0 64.06,49.56 Z" android:fillColor="#FFFFFF" />
+    <path android:pathData="M62.88,60.5 Q63.62,68.46 56.26,76.29 A22.4,22.4 0 0,1 38.71,70.37 Q48.46,70.46 54.3,65 A11,11 0 0,0 62.88,60.5 Z" android:fillColor="#FFFFFF" />
+    <path android:pathData="M52.81,64.94 Q46.29,69.56 35.83,67.1 A22.4,22.4 0 0,1 32.18,48.95 Q36.97,57.43 44.63,59.76 A11,11 0 0,0 52.81,64.94 Z" android:fillColor="#FFFFFF" />
+    <path android:pathData="M43.94,58.44 Q36.67,55.1 33.57,44.82 A22.4,22.4 0 0,1 47.47,32.57 Q42.52,40.97 44.33,48.76 A11,11 0 0,0 43.94,58.44 Z" android:fillColor="#FFFFFF" />
+    <path android:pathData="M45.12,47.5 Q44.38,39.54 51.74,31.71 A22.4,22.4 0 0,1 69.29,37.63 Q59.54,37.54 53.7,43 A11,11 0 0,0 45.12,47.5 Z" android:fillColor="#FFFFFF" />
+    <!-- Curved glass reflection glint inside aperture -->
+    <path
+        android:pathData="M46.77,51.08 Q48.62,47.81 52.11,46.43 Q49.74,49.09 46.77,51.08 Z"
+        android:fillColor="#FFFFFF" />
+</vector>

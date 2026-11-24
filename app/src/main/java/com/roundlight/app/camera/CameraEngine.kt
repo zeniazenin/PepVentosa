@@ -12,51 +12,151 @@ import android.util.Size
 import android.view.Surface
 import android.view.TextureView
 import com.roundlight.app.data.Diagnostics
+import com.roundlight.app.model.LowLightMath
 import java.io.File
 import java.util.UUID
 import kotlin.math.*
 
-data class Lens(val cameraId: String,val physicalId: String?,val label: String,val chars: CameraCharacteristics,val physicalRequestKeys: Set<CaptureRequest.Key<*>> = emptySet()) {
+object LensClassifier {
+    data class Profile(val role: String, val purpose: String, val zoomLabel: String)
+    fun equiv35mm(focalMm: Float?, sensorWidthMm: Float?, sensorHeightMm: Float?): Int? {
+        if (focalMm == null || focalMm <= 0f || sensorWidthMm == null || sensorHeightMm == null) return null
+        val diag = hypot(sensorWidthMm.toDouble(), sensorHeightMm.toDouble())
+        if (diag <= 0.1) return null
+        val fullFrameDiag = hypot(36.0, 24.0)
+        return (focalMm * (fullFrameDiag / diag)).roundToInt().coerceIn(8, 1200)
+    }
+    fun roleFor(isFront: Boolean, equivMm: Int?): Pair<String, String> {
+        if (isFront) return "Front" to "Selfie & close handheld framing"
+        if (equivMm == null) return "Main" to "Primary rear camera"
+        return when {
+            equivMm < 19 -> "Ultra-Wide" to "Expansive scenes & dramatic surround"
+            equivMm <= 34 -> "Wide" to "Natural main perspective for orbits"
+            equivMm <= 58 -> "Standard" to "Classic 50mm-style balanced framing"
+            equivMm <= 99 -> "Portrait" to "Flattering compression & soft parallax"
+            equivMm <= 179 -> "Telephoto" to "Tight subject isolation from farther back"
+            else -> "Super Tele" to "Distant subjects & strong compression"
+        }
+    }
+    fun zoomLabelFor(isFront: Boolean, equivMm: Int?, mainEquivMm: Int?): String {
+        if (isFront) return "Front"
+        if (equivMm == null || mainEquivMm == null || mainEquivMm <= 0) return "1×"
+        val ratio = equivMm.toFloat() / mainEquivMm.toFloat()
+        return when {
+            ratio < 0.90f -> "%.1f×".format(ratio)
+            ratio <= 1.15f -> "1×"
+            ratio < 10f -> {
+                val nearest = ratio.roundToInt()
+                if (abs(ratio - nearest) <= 0.18f) "${nearest}×" else "%.1f×".format(ratio)
+            }
+            else -> "${ratio.roundToInt()}×"
+        }
+    }
+    fun profile(isFront: Boolean, equivMm: Int?, mainEquivMm: Int?): Profile {
+        val (role, purpose) = roleFor(isFront, equivMm)
+        return Profile(role, purpose, zoomLabelFor(isFront, equivMm, mainEquivMm))
+    }
+}
+
+data class Lens(
+    val cameraId: String,
+    val physicalId: String?,
+    val label: String,
+    val chars: CameraCharacteristics,
+    val physicalRequestKeys: Set<CaptureRequest.Key<*>> = emptySet(),
+    val isFront: Boolean = false,
+    val focalMm: Float? = null,
+    val equivMm: Int? = null,
+    val zoomLabel: String = if (isFront) "Front" else "1×",
+    val role: String = if (isFront) "Front" else "Wide",
+    val purpose: String = ""
+) {
     val key get() = cameraId+":"+physicalId.orEmpty()
     val sizes get() = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.getOutputSizes(ImageFormat.JPEG).orEmpty().sortedByDescending { it.width.toLong()*it.height }
     val rawSize get() = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull { it.width.toLong()*it.height }
     val apertures get() = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES) ?: floatArrayOf()
+    val primaryAperture get() = apertures.firstOrNull()
+    val maxMegapixels get() = sizes.firstOrNull()?.let { ((it.width.toLong() * it.height) / 1_000_000.0).roundToInt().coerceAtLeast(1) } ?: 0
+    val hasOis get() = (chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION) ?: intArrayOf()).contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON)
+    val minFocusCm: Int? get() = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)?.takeIf { it > 0f }?.let { (100f / it).roundToInt().coerceAtLeast(1) }
+    val isMacroCapable get() = (minFocusCm ?: Int.MAX_VALUE) <= 12
     val manual get() = (chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()).contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) &&
         chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) != null &&
         chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) != null
     val aeLock get() = chars.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE)==true
     val awbLock get() = chars.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE)==true
     val wbModes get() = chars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) ?: intArrayOf()
+    val specSummary: String get() = buildList {
+        equivMm?.let { add("${it}mm") } ?: focalMm?.let { add("%.1fmm".format(it)) }
+        primaryAperture?.let { add("f/$it") }
+        if (maxMegapixels > 0) add("$maxMegapixels MP")
+        if (rawSize != null) add("RAW")
+        if (hasOis) add("OIS")
+    }.joinToString(" · ")
 }
 data class CameraSettings(val size: Size=Size(4000,3000),val raw: Boolean=false,val locked: Boolean=false,
     val manual: Boolean=false,val iso: Int=100,val exposureNs: Long=4_000_000,val aperture: Float?=null,val wb: Int=CaptureRequest.CONTROL_AWB_MODE_AUTO)
 
 /** All camera/session/image ownership lives on a single handler. Exactly one capture may be in flight. */
 class CameraEngine(private val context: Context,private val tempDir: File,private val log: Diagnostics,
-    private val status: (String)->Unit,private val captured: (ByteArray,File?,String)->Unit,private val failed: (String)->Unit) {
+    private val status: (String)->Unit,private val captured: (ByteArray,File?,String)->Unit,private val failed: (String)->Unit,
+    private val onMetering: (Float?, Boolean)->Unit = { _, _ -> }) {
     private val manager=context.getSystemService(CameraManager::class.java)
     private val thread=HandlerThread("roundlight-camera").apply { start() }; private val handler=Handler(thread.looper)
     private var device: CameraDevice?=null; private var session: CameraCaptureSession?=null
     private var jpegReader: ImageReader?=null; private var rawReader: ImageReader?=null; private var surface: Surface?=null
     private var preview: TextureView?=null; private var lens: Lens?=null; private var settings=CameraSettings()
     private var last: TotalCaptureResult?=null; private var lockedGains: RggbChannelVector?=null; private var lockedTransform: ColorSpaceTransform?=null
+    private var lastMeterUpdateMs = 0L; private var meteredLowLight = false; private var meterVotes = 0
     private var pending: Pending?=null; private var generation=0; @Volatile private var closed=false
     private data class Pending(val id: String=UUID.randomUUID().toString(),var jpeg: ByteArray?=null,var jpegTime: Long=0,var raw: Image?=null,var result: TotalCaptureResult?=null)
     fun lenses(): List<Lens> {
-        val ids=manager.cameraIdList.toSet(); val result=mutableListOf<Lens>()
+        val ids=manager.cameraIdList.toSet()
+        data class RawEntry(val cameraId: String, val physicalId: String?, val chars: CameraCharacteristics, val physicalKeys: Set<CaptureRequest.Key<*>>)
+        val raw=mutableListOf<RawEntry>()
         for(id in ids) {
-            val c=manager.getCameraCharacteristics(id); val facing=if(c.get(CameraCharacteristics.LENS_FACING)==CameraCharacteristics.LENS_FACING_FRONT)"Front" else "Rear"
-            fun label(ch: CameraCharacteristics,suffix: String): String { val focal=ch.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull(); return "$facing · ${focal?.let { "%.1f mm".format(it) } ?: "Camera"} $suffix" }
+            val c=manager.getCameraCharacteristics(id)
             if(c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.getOutputSizes(ImageFormat.JPEG)?.isNotEmpty()==true)
-                result+=Lens(id,null,label(c,"($id)"),c)
+                raw+=RawEntry(id,null,c,emptySet())
             val physicalKeys = c.availablePhysicalCameraRequestKeys?.toSet().orEmpty()
             c.physicalCameraIds.filter { it !in ids }.forEach { physical ->
                 try { val pc=manager.getCameraCharacteristics(physical); if(pc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.getOutputSizes(ImageFormat.JPEG)?.isNotEmpty()==true)
-                    result+=Lens(id,physical,label(pc,"· lens $physical"),pc,physicalKeys)
+                    raw+=RawEntry(id,physical,pc,physicalKeys)
                 } catch(e:Exception) { log.failure("camera.physical",e) }
             }
         }
-        return result
+        val equivs = raw.map { entry ->
+            val focal = entry.chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
+            val sensor = entry.chars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            focal to LensClassifier.equiv35mm(focal, sensor?.width, sensor?.height)
+        }
+        val mainRearEquiv = raw.zip(equivs)
+            .filter { (e, _) -> e.chars.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_FRONT }
+            .mapNotNull { (e, pair) -> pair.second?.let { eq -> e to eq } }
+            .minByOrNull { (e, eq) -> abs(eq - 24) + if (e.physicalId == null) 0 else 2 }
+            ?.second
+        val classified = raw.zip(equivs).map { (entry, pair) ->
+            val (focal, equiv) = pair
+            val isFront = entry.chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+            val profile = LensClassifier.profile(isFront, equiv, mainRearEquiv)
+            val eqPart = equiv?.let { "${it}mm" } ?: focal?.let { "%.1fmm".format(it) } ?: "Lens"
+            val idSuffix = entry.physicalId?.let { "id $it" } ?: "cam ${entry.cameraId}"
+            val label = "${profile.zoomLabel} ${profile.role} · $eqPart ($idSuffix)"
+            Lens(
+                cameraId = entry.cameraId,
+                physicalId = entry.physicalId,
+                label = label,
+                chars = entry.chars,
+                physicalRequestKeys = entry.physicalKeys,
+                isFront = isFront,
+                focalMm = focal,
+                equivMm = equiv,
+                zoomLabel = profile.zoomLabel,
+                role = profile.role,
+                purpose = profile.purpose
+            )
+        }
+        return classified.sortedWith(compareBy<Lens>({ it.isFront }, { it.equivMm ?: 24 }, { it.physicalId != null }, { it.cameraId }))
     }
     fun open(view: TextureView,choice: Lens,config: CameraSettings) {
         closed=false
@@ -174,6 +274,31 @@ class CameraEngine(private val context: Context,private val tempDir: File,privat
                 override fun onCaptureCompleted(s:CameraCaptureSession,r:CaptureRequest,result:TotalCaptureResult) {
                     val first=last==null;last=result
                     if(first)status("Ready · compose, then lock exposure and white balance")
+                    val now = SystemClock.elapsedRealtime()
+                    if (first || now - lastMeterUpdateMs >= 250L) {
+                        lastMeterUpdateMs = now
+                        val choice = lens ?: return
+                        val measured = physicalResult(result, choice.physicalId)
+                        val iso = measured.get(CaptureResult.SENSOR_SENSITIVITY)
+                        val exposureNs = measured.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                        val aperture = measured.get(CaptureResult.LENS_APERTURE) ?: choice.primaryAperture
+                        val ev = LowLightMath.ev100(aperture, exposureNs?.div(1_000_000_000.0), iso)
+                        val wantsLow = when {
+                            ev != null -> LowLightMath.isLowLightEv(ev, meteredLowLight)
+                            iso != null -> iso >= 800
+                            else -> meteredLowLight
+                        }
+                        if (wantsLow != meteredLowLight) {
+                            meterVotes++
+                            if (first || meterVotes >= 2) {
+                                meteredLowLight = wantsLow
+                                meterVotes = 0
+                            }
+                        } else {
+                            meterVotes = 0
+                        }
+                        onMetering(ev, meteredLowLight)
+                    }
                 }
             },handler)
         } catch(e:Exception) { log.failure("camera.preview",e); failed("Camera settings were rejected. Reopen capture with automatic exposure.") }
@@ -234,7 +359,7 @@ class CameraEngine(private val context: Context,private val tempDir: File,privat
         } catch(e:Exception) { rawFile?.delete();discard();log.failure("camera.save",e);failed("Could not finish saving this frame. Try JPEG if RAW repeatedly fails.") }
     }
     private fun discard(){pending?.raw?.close();pending=null}
-    private fun releaseCamera(){discard();session?.close();session=null;device?.close();device=null;jpegReader?.close();jpegReader=null;rawReader?.close();rawReader=null;surface?.release();surface=null;last=null;lockedGains=null;lockedTransform=null}
+    private fun releaseCamera(){discard();session?.close();session=null;device?.close();device=null;jpegReader?.close();jpegReader=null;rawReader?.close();rawReader=null;surface?.release();surface=null;last=null;lockedGains=null;lockedTransform=null;lastMeterUpdateMs=0L;meterVotes=0}
     fun close(){closed=true;handler.post { generation++;releaseCamera() }}
     fun dispose(){closed=true;handler.post { generation++;releaseCamera();thread.quitSafely() }}
 }

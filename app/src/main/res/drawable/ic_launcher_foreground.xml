@@ -1,0 +1,293 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Soft drop shadow under lens barrel -->
+    <path android:pathData="M54,23.9a31.6,31.6 0 1,0 0,63.2a31.6,31.6 0 1,0 0,-63.2z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54"
+                android:centerY="55.5"
+                android:gradientRadius="31.6"
+                android:startColor="#B8000000"
+                android:centerColor="#78000000"
+                android:endColor="#00000000" />
+        </aapt:attr>
+    </path>
+
+    <!-- Outer vintage brushed-brass lens barrel rim -->
+    <path android:pathData="M54,24.2a29.8,29.8 0 1,0 0,59.6a29.8,29.8 0 1,0 0,-59.6z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="28"
+                android:startY="26"
+                android:endX="80"
+                android:endY="82"
+                android:startColor="#EDD4A6"
+                android:centerColor="#A68759"
+                android:endColor="#4B3B26" />
+        </aapt:attr>
+    </path>
+
+    <!-- Fine machined inner brass chamfer -->
+    <path
+        android:pathData="M54,25.6a28.4,28.4 0 1,0 0,56.8a28.4,28.4 0 1,0 0,-56.8z"
+        android:strokeWidth="0.6"
+        android:strokeColor="#70FFF5DF" />
+
+    <!-- Matte black anodized aperture/focus ring -->
+    <path android:pathData="M54,26.3a27.7,27.7 0 1,0 0,55.4a27.7,27.7 0 1,0 0,-55.4z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="30"
+                android:startY="28"
+                android:endX="78"
+                android:endY="80"
+                android:startColor="#26302C"
+                android:centerColor="#151C19"
+                android:endColor="#0C110F" />
+        </aapt:attr>
+    </path>
+
+    <!-- Vintage engraved f-stop calibration ticks -->
+    <path
+        android:pathData="M32.87,41.8L30.96,40.7 M34.93,37.99L33.62,36.9 M38.32,35.31L36.9,33.62 M41.55,32.44L40.7,30.96 M45.65,31.07L44.9,29 M62.35,31.07L63.1,29 M66.45,32.44L67.3,30.96 M69.68,35.31L71.1,33.62 M73.07,37.99L74.38,36.9 M75.13,41.8L77.04,40.7 M71.68,71.68L72.74,72.74 M66.5,75.65L67.25,76.95 M60.47,78.15L60.86,79.6 M54,79L54,80.5 M47.53,78.15L47.14,79.6 M41.5,75.65L40.75,76.95 M36.32,71.68L35.26,72.74"
+        android:strokeWidth="0.82"
+        android:strokeColor="#C8E0D7C5"
+        android:strokeLineCap="round" />
+
+    <!-- Classic analog lens mount red-terracotta index dot at 12 o'clock -->
+    <path
+        android:pathData="M54,26.95a1.45,1.45 0 1,0 0,2.9a1.45,1.45 0 1,0 0,-2.9z"
+        android:fillColor="#E66447" />
+    <path
+        android:pathData="M53.6,27.55a0.45,0.45 0 1,0 0,0.9a0.45,0.45 0 1,0 0,-0.9z"
+        android:fillColor="#99FFE6DA" />
+
+    <!-- Recessed metallic inner filter-thread ring -->
+    <path android:pathData="M54,30a24,24 0 1,0 0,48a24,24 0 1,0 0,-48z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="34"
+                android:startY="34"
+                android:endX="74"
+                android:endY="74"
+                android:startColor="#5D6B63"
+                android:centerColor="#28312D"
+                android:endColor="#AD9874" />
+        </aapt:attr>
+    </path>
+
+    <!-- Deep optical chamber behind blades -->
+    <path
+        android:pathData="M54,30.8a23.2,23.2 0 1,0 0,46.4a23.2,23.2 0 1,0 0,-46.4z"
+        android:fillColor="#0B1110" />
+
+    <!-- 6-blade mechanical iris diaphragm -->
+    <path android:pathData="M54,42.8 Q60.9,37.5 72.77,40.36 A23.2,23.2 0 0,1 75.19,63.44 Q71.74,51.72 63.7,48.4 A11.2,11.2 0 0,0 54,42.8 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="60.5"
+                android:startY="42.74"
+                android:endX="77.47"
+                android:endY="55.24"
+                android:startColor="#35443E"
+                android:endColor="#1A2320" />
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M54,42.8 Q60.9,37.5 72.77,40.36"
+        android:strokeWidth="0.85"
+        android:strokeColor="#CC080C0A"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,42.8 Q60.9,37.5 72.77,40.36"
+        android:strokeWidth="0.4"
+        android:strokeColor="#7AE2E8B8"
+        android:strokeLineCap="round" />
+    <path android:pathData="M63.7,48.4 Q71.74,51.72 75.19,63.44 A23.2,23.2 0 0,1 56.43,77.07 Q64.84,68.23 63.7,59.6 A11.2,11.2 0 0,0 63.7,48.4 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="67"
+                android:startY="54"
+                android:endX="64.66"
+                android:endY="74.94"
+                android:startColor="#242F2B"
+                android:endColor="#121916" />
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M63.7,48.4 Q71.74,51.72 75.19,63.44"
+        android:strokeWidth="0.85"
+        android:strokeColor="#CC080C0A"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M63.7,48.4 Q71.74,51.72 75.19,63.44"
+        android:strokeWidth="0.4"
+        android:strokeColor="#7AE2E8B8"
+        android:strokeLineCap="round" />
+    <path android:pathData="M63.7,59.6 Q64.84,68.23 56.43,77.07 A23.2,23.2 0 0,1 35.23,67.64 Q47.1,70.5 54,65.2 A11.2,11.2 0 0,0 63.7,59.6 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="60.5"
+                android:startY="65.26"
+                android:endX="41.19"
+                android:endY="73.7"
+                android:startColor="#32403B"
+                android:endColor="#18211E" />
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M63.7,59.6 Q64.84,68.23 56.43,77.07"
+        android:strokeWidth="0.85"
+        android:strokeColor="#CC080C0A"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M63.7,59.6 Q64.84,68.23 56.43,77.07"
+        android:strokeWidth="0.4"
+        android:strokeColor="#7AE2E8B8"
+        android:strokeLineCap="round" />
+    <path android:pathData="M54,65.2 Q47.1,70.5 35.23,67.64 A23.2,23.2 0 0,1 32.81,44.56 Q36.26,56.28 44.3,59.6 A11.2,11.2 0 0,0 54,65.2 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="47.5"
+                android:startY="65.26"
+                android:endX="30.53"
+                android:endY="52.76"
+                android:startColor="#222C28"
+                android:endColor="#111715" />
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M54,65.2 Q47.1,70.5 35.23,67.64"
+        android:strokeWidth="0.85"
+        android:strokeColor="#CC080C0A"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,65.2 Q47.1,70.5 35.23,67.64"
+        android:strokeWidth="0.4"
+        android:strokeColor="#7AE2E8B8"
+        android:strokeLineCap="round" />
+    <path android:pathData="M44.3,59.6 Q36.26,56.28 32.81,44.56 A23.2,23.2 0 0,1 51.57,30.93 Q43.16,39.77 44.3,48.4 A11.2,11.2 0 0,0 44.3,59.6 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="41"
+                android:startY="54"
+                android:endX="43.34"
+                android:endY="33.06"
+                android:startColor="#303E39"
+                android:endColor="#17201D" />
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M44.3,59.6 Q36.26,56.28 32.81,44.56"
+        android:strokeWidth="0.85"
+        android:strokeColor="#CC080C0A"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M44.3,59.6 Q36.26,56.28 32.81,44.56"
+        android:strokeWidth="0.4"
+        android:strokeColor="#7AE2E8B8"
+        android:strokeLineCap="round" />
+    <path android:pathData="M44.3,48.4 Q43.16,39.77 51.57,30.93 A23.2,23.2 0 0,1 72.77,40.36 Q60.9,37.5 54,42.8 A11.2,11.2 0 0,0 44.3,48.4 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="47.5"
+                android:startY="42.74"
+                android:endX="66.81"
+                android:endY="34.3"
+                android:startColor="#25302C"
+                android:endColor="#131A17" />
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M44.3,48.4 Q43.16,39.77 51.57,30.93"
+        android:strokeWidth="0.85"
+        android:strokeColor="#CC080C0A"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M44.3,48.4 Q43.16,39.77 51.57,30.93"
+        android:strokeWidth="0.4"
+        android:strokeColor="#7AE2E8B8"
+        android:strokeLineCap="round" />
+
+    <!-- Inner aperture metallic rim bevel -->
+    <path
+        android:pathData="M54,42.6a11.4,11.4 0 1,0 0,22.8a11.4,11.4 0 1,0 0,-22.8z"
+        android:strokeWidth="0.85"
+        android:strokeColor="#99E5CE9E" />
+
+    <!-- Multi-coated central optical glass element -->
+    <path android:pathData="M54,42.9a11.1,11.1 0 1,0 0,22.2a11.1,11.1 0 1,0 0,-22.2z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="51.2"
+                android:centerY="51.2"
+                android:gradientRadius="13.5"
+                android:startColor="#2D5252"
+                android:centerColor="#13292B"
+                android:endColor="#071012" />
+        </aapt:attr>
+    </path>
+
+    <!-- Overlapping LightPlay multi-exposure optical flares inside lens -->
+    <path android:pathData="M57,49a8.2,8.2 0 1,0 0,16.4a8.2,8.2 0 1,0 0,-16.4z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="57.0"
+                android:centerY="57.2"
+                android:gradientRadius="8.2"
+                android:startColor="#F2F7CB7C"
+                android:centerColor="#94EB9A6E"
+                android:endColor="#00EB9A6E" />
+        </aapt:attr>
+    </path>
+    <path android:pathData="M50.4,49a7.2,7.2 0 1,0 0,14.4a7.2,7.2 0 1,0 0,-14.4z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="50.4"
+                android:centerY="56.2"
+                android:gradientRadius="7.2"
+                android:startColor="#C4DCF0A8"
+                android:centerColor="#588FC29F"
+                android:endColor="#008FC29F" />
+        </aapt:attr>
+    </path>
+    <path android:pathData="M56.2,44.4a5.6,5.6 0 1,0 0,11.2a5.6,5.6 0 1,0 0,-11.2z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="56.2"
+                android:centerY="50.0"
+                android:gradientRadius="5.6"
+                android:startColor="#B0F7E6BF"
+                android:centerColor="#45D8E6A3"
+                android:endColor="#00D8E6A3" />
+        </aapt:attr>
+    </path>
+
+    <!-- Smooth tapered curved optical glass specular crescent & pinpoint reflection -->
+    <path
+        android:pathData="M46.4,50.93 Q48.36,47.51 52.02,46.04 Q49.41,48.72 46.4,50.93 Z"
+        android:fillColor="#D4FFFDF5" />
+    <path
+        android:pathData="M58.8,57.5a1.3,1.3 0 1,0 0,2.6a1.3,1.3 0 1,0 0,-2.6z"
+        android:fillColor="#D8FFF4D8" />
+</vector>

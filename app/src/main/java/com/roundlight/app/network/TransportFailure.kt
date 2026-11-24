@@ -32,7 +32,7 @@ class TransportFailure(val step: ConnectionStep, val problem: ConnectionProblem,
                 ConnectionProblem.CONNECT -> "Your phone couldn't connect to $host"
             }
             val action = when (problem) {
-                ConnectionProblem.DNS, ConnectionProblem.CONNECT -> "Try again with Roundlight open. If it continues, check Wi-Fi/mobile data and any VPN or Private DNS settings."
+                ConnectionProblem.DNS, ConnectionProblem.CONNECT -> "Try again with LightPlay open. If it continues, check Wi-Fi/mobile data and any VPN or Private DNS settings."
                 ConnectionProblem.TIMEOUT -> "Try again when your connection is stable."
                 ConnectionProblem.TLS -> "Check your phone's date/time and network settings, then try again."
             }

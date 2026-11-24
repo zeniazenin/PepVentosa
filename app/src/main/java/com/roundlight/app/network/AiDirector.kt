@@ -37,7 +37,28 @@ object ArtContract {
       }}}
     }}
     """).jsonObject
+    fun isPortraitStyle(style: String) = style.trim().startsWith("Portrait", ignoreCase = true)
+
     fun body(model: String,content: JsonArray,style: String) = buildJsonObject {
+        val portrait = isPortraitStyle(style)
+        val maskingGuidance = if (portrait) {
+            """
+            PORTRAIT LOOK RULES:
+            - The goal is a natural, crisp, normal-looking central person surrounded by expressive, messy, overlapping Pep Ventosa background lines and movement.
+            - Keep layer 1 (the reference frame) at opacity 1 with masks=[] so the person's face, eyes, hair, and body remain sharp and lifelike.
+            - On EVERY non-reference layer (layers 2..N), place a soft polygon mask (6..24 points, strength 0.85..1.0) generously covering the central person's face, head, and core torso in that frame's ORIGINAL source coordinates so duplicate faces/limbs do NOT ghost over the reference portrait.
+            - Leave the surrounding background, environment, and outer edges UNMASKED on layers 2..N with healthy opacities so parallax lines, architecture, foliage, and textures layer into signature messy painterly strokes around the person.
+            - Never mask an entire frame; keep outer surroundings visible to preserve the in-the-round effect.
+            - Keep skin tones flattering and natural (restrained warmth and saturation, clean exposure).
+            """.trimIndent()
+        } else {
+            """
+            You may hide distracting objects with soft polygon masks, only when clearly identifiable. Use 3..40 points per
+            polygon in ORIGINAL source image normalized coordinates (top-left 0,0; bottom-right 1,1), strength 0..1,
+            at most 8 masks per frame. Keep the subject intact. Empty masks are preferable to speculative removal.
+            These are editable coarse masks, not precise segmentation. Never mask an entire frame or the entire subject.
+            """.trimIndent()
+        }
         put("model",model); put("store",false); put("stream",true)
         put("instructions","""
             You are an art director for in-the-round multiple-exposure photography inspired by Pep Ventosa.
@@ -51,16 +72,14 @@ object ArtContract {
             Downweight distracting, redundant, blurred or inconsistent frames. Retain the strongest trunk/core structure.
             dx,dy are ADDITIONAL normalized canvas translations, each limited to +/-0.08; degrees is additional clockwise
             rotation limited to +/-4; scale is an additional factor 0.94..1.06. Prefer 0,0,1,0 when uncertain.
-            You may hide distracting objects with soft polygon masks, only when clearly identifiable. Use 3..40 points per
-            polygon in ORIGINAL source image normalized coordinates (top-left 0,0; bottom-right 1,1), strength 0..1,
-            at most 8 masks per frame. Keep the subject intact. Empty masks are preferable to speculative removal.
-            These are editable coarse masks, not precise segmentation. Never mask an entire frame or the entire subject.
+            $maskingGuidance
+            Use 3..40 points per polygon in ORIGINAL source image normalized coordinates (top-left 0,0; bottom-right 1,1), strength 0..1, at most 8 masks per frame.
             Color settings are absolute: exposure EV -1..1, contrast .8..1.35, saturation .5..1.5, warmth -.5...5.
             A review-only request must return layers=[] and judge the actual composite. Keep a concise explanation of
             visible strengths, edits and remaining issues in note. Do not claim pixel-perfect alignment or guaranteed beauty.
         """.trimIndent())
         putJsonArray("input") { add(buildJsonObject { put("role","user");put("content",content) }) }
-        putJsonObject("text") { putJsonObject("format") { put("type","json_schema");put("name","roundlight_art_plan");put("strict",true);put("schema",schema) } }
+        putJsonObject("text") { putJsonObject("format") { put("type","json_schema");put("name","lightplay_art_plan");put("strict",true);put("schema",schema) } }
     }
 }
 class AiDirector(private val auth: ChatGptAuth,private val store: ProjectStore,private val renderer: Renderer,private val log: Diagnostics) {
@@ -93,11 +112,16 @@ class AiDirector(private val auth: ChatGptAuth,private val store: ProjectStore,p
         val reference=ProjectStore.decode(store.photo(p,p.frames.first()),768)
         val canvasAspect=reference.width.toFloat()/reference.height
         val referenceInput=try { image(reference) } finally { reference.recycle() }
+        val portrait = ArtContract.isPortraitStyle(style)
         val batches=p.frames.chunked(6)
         for((i,batch) in batches.withIndex()) {
             currentCoroutineContext().ensureActive();progress("AI art direction · group ${i+1} of ${batches.size}")
+            val modeNote = buildString {
+                if (p.lowLight) append(" Shoot is in LOW LIGHT additive-detail mode (exposures accumulate light and accentuate subject texture).")
+                if (portrait) append(" Portrait look: keep reference frame 1 unmasked so the person looks normal and crisp, and softly mask out the person's face/head/torso on overlay layers 2..N while preserving expressive overlapping background lines.")
+            }
             val input=buildJsonArray {
-                add(text("Reference photograph. Target subject anchor ${p.anchor}. Canvas aspect is the same as this reference."));add(referenceInput)
+                add(text("Reference photograph. Target subject anchor ${p.anchor}. Canvas aspect is the same as this reference.$modeNote"));add(referenceInput)
                 batch.forEachIndexed { batchIdx, frame ->
                     add(text("Requested ID=${frame.id}; layer=${i*6+batchIdx+1}/${p.frames.size}; opacity=${frame.opacity}; existing transform=${frame.transform}. Source image:"))
                     val bitmap=ProjectStore.decode(store.photo(p,frame),768);try {add(image(bitmap))}finally{bitmap.recycle()}
@@ -111,12 +135,18 @@ class AiDirector(private val auth: ChatGptAuth,private val store: ProjectStore,p
                 val regions=edit.masks.map{region->region.copy(points=region.points.map{ImageGeometry.sourceToCanvas(it,sourceAspect,canvasAspect)})}
                 val isReference = frame.id == p.frames.first().id
                 frame.copy(opacity=if(isReference)1f else edit.opacity, visible=true,
-                    transform=if(isReference)t else proposed.takeIf(Transform::valid) ?: t,regions=regions)
+                    transform=if(isReference)t else proposed.takeIf(Transform::valid) ?: t,
+                    regions=if(isReference && portrait) emptyList() else regions)
             } ?: frame })
         }
         progress("AI final review · color and composition")
         val preview=renderer.render(result.copy(crop=0f),1024)
-        val reviewInput=try { buildJsonArray { add(text("Review-only: this is the actual proposed composite. Return layers=[] and a restrained global color grade. Describe any remaining alignment or mask issues."));add(image(preview)) } } finally { preview.recycle() }
+        val reviewPrompt = if (portrait) {
+            "Review-only (Portrait look): this is the actual proposed composite. Return layers=[] and a natural, skin-flattering global color grade. Note whether the central person looks clean and natural while the surroundings retain expressive overlapping lines, and point out any mask edges the user should touch up."
+        } else {
+            "Review-only: this is the actual proposed composite. Return layers=[] and a restrained global color grade. Describe any remaining alignment or mask issues."
+        }
+        val reviewInput=try { buildJsonArray { add(text(reviewPrompt));add(image(preview)) } } finally { preview.recycle() }
         val review=ask(model,reviewInput,style,emptySet())
         return result.copy(grade=Grade(review.exposure,review.contrast,review.saturation,review.warmth),aiNote=review.note).validated()
     }

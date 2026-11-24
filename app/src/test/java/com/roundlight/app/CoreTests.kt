@@ -1,6 +1,7 @@
 package com.roundlight.app
 
 import com.roundlight.app.auth.*
+import com.roundlight.app.camera.*
 import com.roundlight.app.data.*
 import com.roundlight.app.imaging.*
 import com.roundlight.app.model.*
@@ -54,6 +55,10 @@ class CoreTests {
     @Test fun inferenceUsesPlanCompatibleContract(){val body=ArtContract.body("chosen-model",JsonArray(emptyList()),"Natural");assertEquals(JsonPrimitive(false),body["store"]);assertEquals(JsonPrimitive(true),body["stream"])
         for(forbidden in listOf("max_output_tokens","temperature","previous_response_id","background","metadata"))assertFalse(body.containsKey(forbidden))
         assertEquals("json_schema",body["text"]!!.jsonObject["format"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        val portraitBody=ArtContract.body("chosen-model",JsonArray(emptyList()),"Portrait · natural center person, expressive messy surroundings")
+        val portraitInstructions=portraitBody["instructions"]!!.jsonPrimitive.content
+        assertTrue(portraitInstructions.contains("PORTRAIT LOOK RULES"))
+        assertFalse(portraitInstructions.contains("Never mask an entire frame or the entire subject"))
     }
     private fun stream(vararg events:String)=events.joinToString("\n\n"){"data: $it"}.plus("\n\n").reader().buffered()
     @Test fun completedStreamExtractsFinalOutput(){val s=stream("""{"type":"response.completed","response":{"status":"completed","output":[{"content":[{"type":"output_text","text":"{\"ok\":true}"}]}]}}""");assertEquals("{\"ok\":true}",ResponseStream.read(s))}
@@ -100,5 +105,57 @@ class CoreTests {
         val expected=IntArray(pixels.size){i->val c=pixels[i];ColorMath.grade((c shr 16 and 255)/255f,(c shr 8 and 255)/255f,(c and 255)/255f,grade)}
         ColorMath.gradeRow(pixels,grade)
         assertArrayEquals(expected,pixels)
+    }
+    @Test fun lensClassifierIdentifiesMultiCameraRolesAndZoom(){
+        val mainEq=LensClassifier.equiv35mm(6.3f,9.8f,7.3f)!!
+        assertTrue("main eq $mainEq",mainEq in 21..25)
+        val uwEq=LensClassifier.equiv35mm(2.2f,5.6f,4.2f)!!
+        assertTrue("uw eq $uwEq",uwEq in 12..15)
+        val portraitEq=LensClassifier.equiv35mm(7.9f,4.0f,3.0f)!!
+        assertTrue("portrait eq $portraitEq",portraitEq in 65..74)
+        val teleEq=LensClassifier.equiv35mm(18.6f,5.7f,4.3f)!!
+        assertTrue("tele eq $teleEq",teleEq in 108..120)
+        assertEquals("Ultra-Wide",LensClassifier.profile(false,uwEq,mainEq).role)
+        assertEquals("0.6×",LensClassifier.profile(false,uwEq,mainEq).zoomLabel)
+        assertEquals("Wide",LensClassifier.profile(false,mainEq,mainEq).role)
+        assertEquals("1×",LensClassifier.profile(false,mainEq,mainEq).zoomLabel)
+        assertEquals("Portrait",LensClassifier.profile(false,portraitEq,mainEq).role)
+        assertEquals("3×",LensClassifier.profile(false,portraitEq,mainEq).zoomLabel)
+        assertEquals("Telephoto",LensClassifier.profile(false,teleEq,mainEq).role)
+        assertEquals("5×",LensClassifier.profile(false,teleEq,mainEq).zoomLabel)
+        assertEquals("Front",LensClassifier.profile(true,26,mainEq).zoomLabel)
+    }
+    @Test fun lowLightEvAndHysteresisDistinguishDaylightFromNight(){
+        val sunny=LowLightMath.ev100(1.8f,1.0/2000.0,50)!!
+        assertTrue("sunny $sunny",sunny>12f)
+        assertFalse(LowLightMath.isLowLightEv(sunny,false))
+        val night=LowLightMath.ev100(1.8f,1.0/20.0,1600)!!
+        assertTrue("night $night",night<3f)
+        assertTrue(LowLightMath.isLowLightEv(night,false))
+        // Hysteresis boundary (EV 5.2): stays off if coming from daylight, stays on if already in low light
+        assertFalse(LowLightMath.isLowLightEv(5.2f,false))
+        assertTrue(LowLightMath.isLowLightEv(5.2f,true))
+        assertFalse(LowLightMath.isLowLightEv(6.0f,true))
+    }
+    @Test fun lowLightPixelDetectorAndLayerWeightsWork(){
+        val darkScene=IntArray(100){0xff181c22.toInt()}
+        assertTrue(LowLightMath.isLowLightPixels(darkScene))
+        val nightWithLamps=IntArray(100){if(it<5)0xfffff0d0.toInt() else 0xff14181e.toInt()}
+        assertTrue(LowLightMath.isLowLightPixels(nightWithLamps))
+        val brightDay=IntArray(100){0xffb8c6d0.toInt()}
+        assertFalse(LowLightMath.isLowLightPixels(brightDay))
+        val weights=LowLightMath.layerWeights(floatArrayOf(1f,0.5f,1f/3f,0.25f),booleanArrayOf(true,true,true,true))
+        weights.forEach { assertEquals(0.25f,it,0.0001f) }
+        assertTrue(LowLightMath.additiveBoost(8) > LowLightMath.additiveBoost(2))
+    }
+    @Test fun detailAccentuationSharpensHighContrastEdgeAndPreservesFlatShadow(){
+        val w=7; val h=7
+        val img=Array(h){IntArray(w){x->if(x<3)0xff202020.toInt() else 0xff707070.toInt()}}
+        LowLightMath.accentuateDetailRows(w,h,readRow={y,buf->img[y].copyInto(buf)},writeRow={y,buf->buf.copyInto(img[y])})
+        val darkSide=(img[3][2] and 255)
+        val brightSide=(img[3][3] and 255)
+        assertTrue("edge contrast boosted: dark=$darkSide bright=$brightSide",brightSide>0x70 && darkSide<0x20)
+        // Flat region remains untouched
+        assertEquals(0x20,img[3][1] and 255)
     }
 }

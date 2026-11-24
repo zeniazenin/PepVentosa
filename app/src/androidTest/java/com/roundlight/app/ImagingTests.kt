@@ -29,6 +29,14 @@ import java.io.File
         val result=renderer.render(restored,400);assertEquals(128f,Color.blue(result.getPixel(150,200)).toFloat(),5f);result.recycle()
     }
     @Test fun recipePersistsOriginalAndMasks(){val p=add(project(),Color.GREEN).let{it.copy(frames=it.frames.map{f->f.copy(masks=listOf(Stroke(listOf(Point(.4f,.6f)))) )})};store.save(p);assertEquals(p,store.read(p.id));assertTrue(store.photo(p,p.frames.first()).length()>0)}
+    @Test fun renameAndDeleteShootPersistAndCleanFolder(){
+        val p=add(project(),Color.CYAN)
+        val renamed=store.rename(p,"Renamed orbit")
+        assertEquals("Renamed orbit",store.read(p.id).name)
+        assertEquals(renamed,store.read(p.id))
+        store.delete(p.id)
+        assertFalse(store.folder(p.id).exists())
+    }
     @Test fun cropDimensionsMatchRecipe()=runBlocking {val p=add(project(),Color.YELLOW).copy(crop=.1f);val result=Renderer(store).render(p,400);assertEquals(240,result.width);assertEquals(320,result.height);result.recycle()}
     @Test fun encryptedVaultNeverWritesPlainTokens(){val vault=CredentialStore(context);val before=vault.read();try{val value=Connections(accounts=listOf(Account("oaiapp_fixture",accessToken="synthetic-secret-for-encryption-test")),activeClientId="oaiapp_fixture");vault.write(value);assertEquals(value,vault.read());assertFalse(File(context.noBackupFilesDir,"chatgpt.vault").readBytes().toString(Charsets.ISO_8859_1).contains("synthetic-secret"))}finally{vault.write(before)}}
     @Test fun manyLayerRenderKeepsDimensionsAndCompletes()=runBlocking {var p=project();repeat(24){p=add(p,Color.rgb(it*9,120,180))};val start=System.currentTimeMillis();val output=Renderer(store).render(p,400);assertEquals(300,output.width);assertTrue(System.currentTimeMillis()-start<15000);output.recycle()}
@@ -40,5 +48,16 @@ import java.io.File
         val p=first.copy(frames=layers);val output=Renderer(store).render(p,6000)
         assertTrue(output.width<=4000);assertTrue(output.width.toLong()*output.height*28<Runtime.getRuntime().maxMemory()*.43)
         assertTrue(Color.blue(output.getPixel(output.width/2,output.height/2))>150);output.recycle()
+    }
+    @Test fun lowLightModeAddsExposuresBrighterThanStandardAverage()=runBlocking {
+        val dimColor=Color.rgb(42,46,54)
+        var p=project()
+        repeat(6){p=add(p,dimColor)}
+        val normal=Renderer(store).render(p.copy(lowLight=false),200)
+        val lowLight=Renderer(store).render(p.copy(lowLight=true),200)
+        val nc=normal.getPixel(normal.width/2,normal.height/2)
+        val lc=lowLight.getPixel(lowLight.width/2,lowLight.height/2)
+        assertTrue("lowLight green ${Color.green(lc)} > normal ${Color.green(nc)}",Color.green(lc) > Color.green(nc) + 18)
+        normal.recycle();lowLight.recycle()
     }
 }

@@ -28,7 +28,7 @@ class Diagnostics(context: Context) {
         }
     }
     @Synchronized fun report(): String = buildString {
-        appendLine("Roundlight ${BuildConfig.VERSION_NAME}; Android ${Build.VERSION.SDK_INT}; ${Build.MANUFACTURER} ${Build.MODEL}")
+        appendLine("LightPlay ${BuildConfig.VERSION_NAME}; Android ${Build.VERSION.SDK_INT}; ${Build.MANUFACTURER} ${Build.MODEL}")
         appendLine("No credentials, photographs, account identifiers, or authorization URLs are included.")
         listOf(File(dir,"previous.log"),current).filter { it.exists() }.forEach { runCatching { append(it.readText()) } }
     }

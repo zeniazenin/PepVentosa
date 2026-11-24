@@ -12,7 +12,7 @@ class ServiceFailure(val status: Int, val code: String, val requestId: String = 
     val usageLimit get() = code == "subscription_sharing_usage_limit_exceeded"
     companion object {
         fun messageFor(status: Int, code: String): String = when (code) {
-            "subscription_sharing_usage_limit_exceeded" -> "Your plan or Roundlight usage limit was reached. Open Manage usage to review it."
+            "subscription_sharing_usage_limit_exceeded" -> "Your plan or LightPlay usage limit was reached. Open Manage usage to review it."
             "subscription_sharing_user_not_eligible" -> "This ChatGPT account or workspace is not eligible for plan usage. Check your account's eligibility."
             "subscription_sharing_usage_unavailable", "subscription_sharing_user_unavailable" -> "ChatGPT plan usage is temporarily unavailable. Your connection is saved; try later."
             "subscription_sharing_unsupported_capability" -> "This model or request feature is not supported by your ChatGPT plan. Select another image-capable model."

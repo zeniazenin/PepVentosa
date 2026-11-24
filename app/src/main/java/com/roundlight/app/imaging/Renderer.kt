@@ -24,10 +24,21 @@ class Renderer(private val store: ProjectStore) {
         val original=ProjectStore.dimensions(store.photo(p,p.frames.first()))
         val (w,h)=dimensions(original.first,original.second,edge,Runtime.getRuntime().maxMemory())
         val result=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888); val canvas=Canvas(result)
+        val useLowLight = p.lowLight && solo == null
+        var luminous: Bitmap? = if (useLowLight) Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLACK) } else null
+        val luminousCanvas = luminous?.let(::Canvas)
         val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        val screenPaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SCREEN) }
         try {
             val frames=if(solo==null)p.frames else listOf(p.frames[solo.coerceIn(p.frames.indices)].copy(opacity=1f,visible=true))
             require(frames.any { it.visible && it.opacity>0 }) { "At least one layer must be visible." }
+            val weights = if (useLowLight) {
+                LowLightMath.layerWeights(
+                    FloatArray(frames.size) { frames[it].opacity },
+                    BooleanArray(frames.size) { frames[it].visible }
+                )
+            } else FloatArray(0)
+            val lowLightBoost = if (useLowLight) LowLightMath.additiveBoost(frames.count { it.visible && it.opacity > 0f }) else 1f
             frames.forEachIndexed { index,f ->
                 currentCoroutineContext().ensureActive(); onProgress(index*100/frames.size)
                 if(f.visible && f.opacity>0) {
@@ -37,9 +48,15 @@ class Renderer(private val store: ProjectStore) {
                         val sw=source.width.toFloat(); val sh=source.height.toFloat(); val fit=min(w/sw,h/sh)
                         val rect=RectF((w-sw*fit)/2,(h-sh*fit)/2,(w+sw*fit)/2,(h+sh*fit)/2)
                         val gain=ColorMatrix(floatArrayOf(f.exposureGain,0f,0f,0f,0f,0f,f.exposureGain,0f,0f,0f,0f,0f,f.exposureGain,0f,0f,0f,0f,0f,1f,0f))
-                        paint.colorFilter=ColorMatrixColorFilter(gain)
+                        val filter = ColorMatrixColorFilter(gain)
+                        paint.colorFilter=filter
+                        val screenAlpha = if (useLowLight) ((weights[index] * lowLightBoost).coerceIn(0f, 1f) * 255f).roundToInt() else 0
                         if(f.masks.isEmpty() && f.regions.isEmpty()) {
                             canvas.save(); canvas.concat(transform); paint.alpha=(255*f.opacity).roundToInt(); canvas.drawBitmap(source,null,rect,paint); canvas.restore()
+                            if (luminousCanvas != null && screenAlpha > 0) {
+                                screenPaint.colorFilter = filter; screenPaint.alpha = screenAlpha
+                                luminousCanvas.save(); luminousCanvas.concat(transform); luminousCanvas.drawBitmap(source, null, rect, screenPaint); luminousCanvas.restore()
+                            }
                         } else {
                             val layer=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888)
                             val mask=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888)
@@ -66,13 +83,36 @@ class Renderer(private val store: ProjectStore) {
                                 // Mask and layer are already in canvas coordinates.
                                 Canvas(layer).drawBitmap(mask,0f,0f,maskPaint)
                                 canvas.drawBitmap(layer,0f,0f,Paint().apply { alpha=(255*f.opacity).roundToInt() })
+                                if (luminousCanvas != null && screenAlpha > 0) {
+                                    screenPaint.colorFilter = null; screenPaint.alpha = screenAlpha
+                                    luminousCanvas.drawBitmap(layer, 0f, 0f, screenPaint)
+                                }
                             } finally { layer.recycle(); mask.recycle() }
                         }
                     } finally { source.recycle() }
                 }
             }
-            // Flatten transparency onto warm paper, then apply one shared finish in bounded rows.
-            canvas.drawColor(Color.rgb(245,243,236),PorterDuff.Mode.DST_OVER)
+            // Flatten transparency onto deep night tone in low light, or warm paper in daylight.
+            canvas.drawColor(if (useLowLight) Color.rgb(10, 13, 15) else Color.rgb(245, 243, 236), PorterDuff.Mode.DST_OVER)
+            if (useLowLight && luminous != null) {
+                val meanRow = IntArray(w)
+                val lumRow = IntArray(w)
+                for (y in 0 until h) {
+                    if (y % 32 == 0) currentCoroutineContext().ensureActive()
+                    result.getPixels(meanRow, 0, w, 0, y, w, 1)
+                    luminous.getPixels(lumRow, 0, w, 0, y, w, 1)
+                    LowLightMath.combineLowLightRow(meanRow, lumRow)
+                    result.setPixels(meanRow, 0, w, 0, y, w, 1)
+                }
+                luminous.recycle(); luminous = null
+                currentCoroutineContext().ensureActive()
+                LowLightMath.accentuateDetailRows(
+                    width = w,
+                    height = h,
+                    readRow = { y, buf -> result.getPixels(buf, 0, w, 0, y, w, 1) },
+                    writeRow = { y, buf -> result.setPixels(buf, 0, w, 0, y, w, 1) }
+                )
+            }
             if(solo==null) {
                 val row=IntArray(w)
                 for(y in 0 until h) { if(y%32==0)currentCoroutineContext().ensureActive(); result.getPixels(row,0,w,0,y,w,1)
@@ -83,7 +123,7 @@ class Renderer(private val store: ProjectStore) {
             onProgress(100)
             if(p.crop>0 && solo==null) { val dx=(w*p.crop).toInt(); val dy=(h*p.crop).toInt(); val cw=w-2*dx; val ch=h-2*dy; if(cw>0 && ch>0) { val cropped=Bitmap.createBitmap(result,dx,dy,cw,ch); if(cropped!==result)result.recycle(); return cropped } }
             return result
-        } catch(e:Throwable) { result.recycle(); throw e }
+        } catch(e:Throwable) { luminous?.recycle(); result.recycle(); throw e }
     }
     suspend fun align(p: Project,onProgress: (Int)->Unit={}): Project {
         require(p.frames.isNotEmpty()); val n=96

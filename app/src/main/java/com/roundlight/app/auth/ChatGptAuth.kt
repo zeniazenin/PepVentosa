@@ -96,7 +96,7 @@ class ChatGptAuth(private val vault: CredentialStore) {
                             .addQueryParameter("scope", "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct")
                             .addQueryParameter("resource", resource).addQueryParameter("state", state).addQueryParameter("nonce", nonce)
                             .addQueryParameter("code_challenge_method", "S256").addQueryParameter("code_challenge", OAuthRules.challenge(verifier))
-                        if (existing == null) url.addQueryParameter("agent_name_hint", "Roundlight")
+                        if (existing == null) url.addQueryParameter("agent_name_hint", "LightPlay")
                         else {
                             if (existing.idToken.isNotBlank()) url.addQueryParameter("id_token_hint", existing.idToken)
                             if (existing.email.isNotBlank()) url.addQueryParameter("login_hint", existing.email)
@@ -128,9 +128,9 @@ class ChatGptAuth(private val vault: CredentialStore) {
                                     if (parts.firstOrNull() == "GET" && uri?.path == "/auth/callback") {
                                         val parsed = runCatching { OAuthRules.callback(uri.rawQuery.orEmpty(), state, existing?.clientId) }
                                         val html = if (parsed.isSuccess) {
-                                            "<!doctype html><meta name='viewport' content='width=device-width'><title>Roundlight</title><body style='font-family:system-ui;padding:40px;background:#f7f4ed;color:#183e37'><h1>Return to Roundlight</h1><p>Sign-in received. Return to Roundlight to finish connecting your account.</p></body>"
+                                            "<!doctype html><meta name='viewport' content='width=device-width'><title>LightPlay</title><body style='font-family:system-ui;padding:40px;background:#f7f4ed;color:#183e37'><h1>Return to LightPlay</h1><p>Sign-in received. Return to LightPlay to finish connecting your account.</p></body>"
                                         } else {
-                                            "<!doctype html><meta name='viewport' content='width=device-width'><title>Roundlight</title><body style='font-family:system-ui;padding:40px;background:#f7f4ed;color:#183e37'><h1>Sign-in did not complete</h1><p>Return to Roundlight to try again.</p></body>"
+                                            "<!doctype html><meta name='viewport' content='width=device-width'><title>LightPlay</title><body style='font-family:system-ui;padding:40px;background:#f7f4ed;color:#183e37'><h1>Sign-in did not complete</h1><p>Return to LightPlay to try again.</p></body>"
                                         }
                                         val bytes = html.toByteArray(Charsets.UTF_8)
                                         runCatching {
@@ -163,7 +163,7 @@ class ChatGptAuth(private val vault: CredentialStore) {
                     }
                 }
             } catch (_: TimeoutCancellationException) {
-                throw IllegalStateException("ChatGPT sign-in timed out. Try again and return to Roundlight promptly.")
+                throw IllegalStateException("ChatGPT sign-in timed out. Try again and return to LightPlay promptly.")
             }
         }
     }

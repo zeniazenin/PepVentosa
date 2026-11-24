@@ -1,4 +1,4 @@
-# Roundlight
+# LightPlay
 
 A native Android studio for the Pep Ventosa **in-the-round** technique: capture a sequence, compose the layers, then refine and export the result. Built for testing on a Samsung Galaxy S26 Ultra; Android 10 or newer is required. The app is independent of Pep Ventosa and OpenAI.
 
@@ -9,7 +9,7 @@ Build the debug APK with `./gradlew :app:assembleDebug` (Windows: `gradlew.bat`)
 1. **Start a new shoot.** Choose a name. Capture photos or import a set with the Android document picker.
 2. In **Capture**, open the settings icon to select a camera, JPEG resolution, and RAW + JPEG if exposed by that lens. Set manual shutter/ISO, aperture where adjustable, and white balance. Compose the subject and press **Lock**, then take photos. The crosshair and optional translucent first frame help keep position and scale consistent. Keep taking frames until you are satisfied; the app imposes no frame-count limit, though storage, processing time and AI usage grow with the sequence.
 3. **Align locally** creates a subject-focused starting point without an account. In **Edit layers**, long-press the subject to reposition the alignment anchor before aligning again. A low-confidence frame retains its original placement for manual correction.
-4. For AI assistance, open **Account → Continue with ChatGPT**, complete OpenAI's browser consent, and return to Roundlight. Authorize ChatGPT plan usage and load your available models. Choose an image-capable model, return to your shoot and select **Compose with AI**.
+4. For AI assistance, open **Account → Continue with ChatGPT**, complete OpenAI's browser consent, and return to LightPlay. Authorize ChatGPT plan usage and load your available models. Choose an image-capable model, return to your shoot and select **Compose with AI**.
 5. In the finishing room, select a layer to change opacity, hide/show it, or adjust position, scale and rotation. **Hide** and **Restore** paint soft masks with your finger. **View selected layer** helps inspect a mask. **Undo** retains the last 30 edits in the current session. Color controls and edge trim affect the finished image.
 6. **Export** saves JPEG (quality 97) or PNG through Android's document picker. **Back up shoot + originals** writes a ZIP containing every JPEG, available DNG files, and the JSON edit recipe.
 
@@ -27,7 +27,7 @@ An **illustrated demo** creates nine original synthetic tree images locally. It 
 
 ## OpenAI account connection
 
-Roundlight adapts the user's MIT-licensed **ThisRock** authentication implementation, with attribution in `NOTICE-ThisRock.txt`. It uses the official [open-source Sign in with ChatGPT flow](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), including dynamic per-installation registration, system-browser OAuth, PKCE, state and nonce verification, signed ID-token validation, encrypted Android Keystore storage, serialized token refresh, account switching and session revocation. No shared API key, client secret, Codex credentials or private ChatGPT inference endpoint is used.
+LightPlay adapts the user's MIT-licensed **ThisRock** authentication implementation, with attribution in `NOTICE-ThisRock.txt`. It uses the official [open-source Sign in with ChatGPT flow](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), including dynamic per-installation registration, system-browser OAuth, PKCE, state and nonce verification, signed ID-token validation, encrypted Android Keystore storage, serialized token refresh, account switching and session revocation. No shared API key, client secret, Codex credentials or private ChatGPT inference endpoint is used.
 
 The app waits until it is foregrounded again before exchanging the browser authorization code. OAuth tokens are encrypted with AES-GCM in the no-backup directory. Sign-out attempts remote revocation and always removes the selected account's local tokens. If revocation cannot be confirmed, the app directs you to ChatGPT settings.
 
@@ -53,7 +53,7 @@ $env:ANDROID_HOME = 'path-to-android-sdk'
 .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
 ```
 
-Run device tests on a dedicated emulator with `scripts/Test-Emulator.ps1`. They create synthetic fixtures and grant camera permission to the test app. Do not run them on a personal phone containing real Roundlight shoots or credentials. See [the S26 Ultra field checklist](docs/TESTING.md) for hardware and live-account acceptance.
+Run device tests on a dedicated emulator with `scripts/Test-Emulator.ps1`. They create synthetic fixtures and grant camera permission to the test app. Do not run them on a personal phone containing real LightPlay shoots or credentials. See [the S26 Ultra field checklist](docs/TESTING.md) for hardware and live-account acceptance.
 
 **Account → Export diagnostic log** produces rotating, bounded event logs with timings, counts, device/build information and source stack locations on errors. It excludes photos, credentials, account identifiers, authorization URLs and exception messages. Network errors distinguish DNS, timeout, TLS, authorization, plan limits and unsupported capabilities; inference requests are not automatically replayed after an ambiguous failure.
 
